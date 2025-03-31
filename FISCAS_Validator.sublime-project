@@ -1,0 +1,30 @@
+{
+	"build_systems":
+	[
+		{
+			"file_regex": "^[ ]*File \"(...*?)\", line ([0-9]*)",
+			"name": "Anaconda Python Builder",
+			"selector": "source.python",
+			"shell_cmd": "\"python\" -u \"$file\"",
+		}
+	],
+	"folders":
+	[
+		{
+			"path": "D:\\Jan\\fiscas-validationKit",
+		}
+	],
+	"debugger_configurations":
+	[
+		{
+            "name": "Python Debug",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "pythonPath": "D:/Jan/fiscas/fiscas_venv/Scripts/python.exe",
+            "args": [],
+        }
+	],
+}
