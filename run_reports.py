@@ -1,6 +1,7 @@
 import os
 
 # Define the parameters and their values for each run
+i = 0
 for ms_spacing in [1, 5, 20]:
     for rotation in [0, 1, 5, 10]:
         for scale in [1, 0.99, 1.1]:
@@ -10,10 +11,11 @@ for ms_spacing in [1, 5, 20]:
             # Path to the Quarto file
             quarto_file = "Report.qmd"
             
-            output_file = f"output/Report_ms{ms_spacing}_rot{rotation}_scale{scale}.pdf"
-            
+            output_dir = "D:/Jan/fiscas-validationKit/reports/"
+            output_file = f"Report_ms{i}.pdf"
+            i += 1
             # Construct the Quarto render command with the output option
-            command = f"quarto render {quarto_file} {param_overrides} --output {output_file}"
+            command = f"quarto render {quarto_file} {param_overrides} --output {output_file} --output-dir {output_dir}"
             
             # Print the command for debugging
             print(f"Running: {command}")
