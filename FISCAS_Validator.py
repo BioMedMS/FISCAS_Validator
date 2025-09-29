@@ -43,7 +43,7 @@ from matplotlib.colors import LinearSegmentedColormap
 
 class Validator:
     def __init__(self,
-        path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy",
+        path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy/HuTu80",
         output="D:/Jan/fiscas-validationKit/output/",
         use_perfect_registration=False,
         use_perfect_segmentation=False,
@@ -63,8 +63,11 @@ class Validator:
         plot=True,
         save_img=False,
         remove_ambiguous=True,
-        cell_diameter=120,
-        render_animation=False):  # for segmentation
+        cell_diameter=0,
+        render_animation=False,
+        texture=None, 
+        texture_path="./texture.jpg",
+        texture_epsilon=1):  #-1 < epsilon < 1
         
         
         self.path_sample_cells = path_sample_cells
@@ -97,6 +100,9 @@ class Validator:
         self.msi_canvas_coordinates = {}
         self.cell_intensities = {}
         self.render_animation = render_animation
+        self.texture = texture
+        self.texture_path = texture_path
+        self.texture_epsilon = texture_epsilon
         return None
 
     def return_settings(self):
@@ -121,7 +127,10 @@ class Validator:
             "plot": self.plot,
             "save_img": self.save_img,
             "remove_ambiguous": self.remove_ambiguous,
-            "cell_diameter": self.cell_diameter
+            "cell_diameter": self.cell_diameter,
+            "texture": self.texture,
+            "texture_path": self.texture_path,
+            "texture_epsilon": self.texture_epsilon,
         }
         return settings
 
@@ -136,7 +145,7 @@ class Validator:
             cell_chosen = seed
             angle = 0
             scaling_factor = 1
-        is_multiplet = "doublet" in self.cell_masks_paths[cell_chosen] or "triplet" in self.cell_masks_paths[cell_chosen]
+        is_multiplet = "doublet" in self.cell_masks_paths[cell_chosen] or "triplet" in self.cell_masks_paths[cell_chosen] or "multiplet" in self.cell_masks_paths[cell_chosen]
         cell_mask = np.array(Image.open(self.cell_masks_paths[cell_chosen]), dtype=np.uint16)
         if is_multiplet:
             mask_ids = np.unique(cell_mask)
@@ -163,8 +172,9 @@ class Validator:
 
     # apply diffusion on cell mask
     def diffuse_mask(self, mask, diffusion):
+        mask_idx = np.max(mask)
         mask[mask > 0] = 255
-        r = int(self.diffusion / self.ms_spacing)
+        r = int(self.diffusion / self.mic_spacing)
         if r < 1:
             return mask
         kernel = np.fromfunction(lambda x, y: ((x-r)**2 + (y-r)**2 <= r**2)*1, (2*r+1, 2*r+1), dtype=int).astype(np.uint8)
@@ -172,8 +182,7 @@ class Validator:
         mask_padded = np.zeros((len(mask)+2*padding, len(mask[0])+2*padding))
         mask_padded[padding:padding+len(mask), padding:padding+len(mask[0])] = mask
         dil_sample = cv2.dilate(np.float32(mask_padded), kernel, iterations = 1)
-        dil_sample = dil_sample.astype('uint8')
-        dil_sample = dil_sample * 255
+        dil_sample = (dil_sample/np.max(dil_sample) * mask_idx).astype(np.uint16)
         return dil_sample
 
 
@@ -183,8 +192,16 @@ class Validator:
             pad_height = (scale_factor - height % scale_factor) % scale_factor
             pad_width = (scale_factor - width % scale_factor) % scale_factor
 
-            # Apply zero padding to the image
-            padded_image = np.pad(image, ((0, pad_height), (0, pad_width)), mode='constant', constant_values=0)
+            # Apply zero padding to the image, centering it
+            padded_image = np.pad(
+                image,
+                (
+                    (pad_height // 2, pad_height - pad_height // 2),
+                    (pad_width // 2, pad_width - pad_width // 2)
+                ),
+                mode='constant',
+                constant_values=0
+            )
 
             # Reshape the padded image to group the pixels into blocks
             new_height = padded_image.shape[0] // scale_factor
@@ -208,6 +225,16 @@ class Validator:
             distance = np.sqrt((x-cx)**2 + (y-cy)**2) * self.mic_spacing
             intensities[x, y] = np.exp(-(distance / sigma)**2) + 0.1
         rescaled_intensities = self.sum_pooling(intensities, int(self.ms_spacing/self.mic_spacing))
+        # test_img = skimage.transform.resize(rescaled_intensities, mask.shape, order=0, anti_aliasing=False)
+        # test_img_rgb = np.zeros((len(mask), len(mask[0]), 3))
+        # test_img_rgb[:, :, 0] = test_img / np.max(test_img)
+        # test_img_rgb[:, :, 1] = mask / np.max(mask)
+        # fig, ax = plt.subplots(1,4)
+        # ax[0].imshow(mask)
+        # ax[1].imshow(intensities)
+        # ax[2].imshow(rescaled_intensities)
+        # ax[3].imshow(test_img_rgb)
+        # plt.show()
         return rescaled_intensities, np.sum(intensities)
 
 
@@ -427,8 +454,8 @@ class Validator:
             if self.save_img:
                 plt.savefig(self.output + "/Registration_error_plot.svg", bbox_inches='tight', pad_inches=0)
         #print(f"Mean error in µm: {np.mean(error, axis=0)} +/- {np.std(error, axis=0)}")
-        self.registration_metrics["mre"] = np.mean(error, axis=0)
-        self.registration_metrics["mre_std"] = np.std(error, axis=0)
+        self.registration_metrics["mre"] = np.mean(np.abs(error), axis=0)
+        self.registration_metrics["mre_std"] = np.std(np.abs(error), axis=0)
         return None
 
 
@@ -481,6 +508,23 @@ class Validator:
         f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         return iou_all_masks, precision, recall, f1_score
 
+
+    def add_texture(self, image, texture_path="./texture.jpg"):
+        if np.abs(self.texture_epsilon) > 1:
+            self.texture_epsilon /= np.abs(self.texture_epsilon)  # catch epsilon values outside of [-1, 1]
+        image = np.array(image)
+        texture = np.array(Image.open(texture_path))
+        if len(texture.shape) == 3:
+            texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
+        texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
+        texture = texture / np.max(texture) * self.texture_epsilon # Normalize texture and weight it by epsilon
+        intensity = np.percentile(image, 99)
+        texture = skimage.exposure.rescale_intensity(texture, in_range=(0,1), out_range=(0, intensity))
+        combined_image = np.zeros_like(image)
+        combined_image = texture + image
+        return combined_image
+
+
     def main(self):
         # print("populating canvas...")
         start = time.perf_counter()
@@ -495,16 +539,21 @@ class Validator:
 
         all_images = glob.glob(os.path.join(
             self.path_sample_cells, '**', '*cell*'), recursive=True)
-        self.cell_image_paths = [
-            file for file in all_images if 'mask' not in os.path.basename(file)]
-        self.cell_masks_paths = [
-            file for file in all_images if 'mask' in os.path.basename(file)]
+        self.cell_image_paths = sorted([
+            file for file in all_images if 'mask' not in os.path.basename(file)])
+        self.cell_masks_paths = sorted([
+            file for file in all_images if 'mask' in os.path.basename(file)])
 
-        if self.seed != 0:
-            random.seed(self.seed)
+        if self.seed == 0:
+            self.seed = random.randint(1, 10000)
+        random.seed(self.seed)
         density = 0
         i = 0
         current_id = 1
+        if self.diffusion > 0:
+            padding = int(self.diffusion/self.mic_spacing)
+        else:
+            padding = 0
         while density < self.cell_density:
             if i > self.max_cell_placement_iterations:
                 # print(f"aborted populating canvas. Too many cell placement cycles ({i})")
@@ -541,20 +590,30 @@ class Validator:
                     if (x > 0.25 * len(self.mic_canvas[0])) & (x < 0.75 * len(self.mic_canvas[0])) & (y > 0.25 * len(self.mic_canvas)) & (y < 0.75 * len(self.mic_canvas)):
                         # conversion to global ms coordinate system
                         x_ms_coord = round(
-                            x/(self.ms_spacing/self.mic_spacing))
+                            (x)/(self.ms_spacing/self.mic_spacing))
                         y_ms_coord = round(
-                            y/(self.ms_spacing/self.mic_spacing))
+                            (y)/(self.ms_spacing/self.mic_spacing))
                         offset_x = round(
                             len(self.mic_canvas[0])*0.25*self.mic_spacing/self.ms_spacing)
                         offset_y = round(
                             len(self.mic_canvas)*0.25*self.mic_spacing/self.ms_spacing)
                         x_ms = x_ms_coord - offset_x  # conversion to local ms coordinate system
                         y_ms = y_ms_coord - offset_y
+
                         for cell_id in range(current_id, current_mask_index+1):
                             cell_mask = np.zeros_like(mask)
                             cell_mask[mask == cell_id] = cell_id
                             msi_cell, cell_intensity = self.generate_maldi_cell(
                                 cell_mask, sigma=70, diffusion=self.diffusion)
+                            # test_img = skimage.transform.resize(msi_cell, cell_mask.shape, order=0, anti_aliasing=False)
+                            # test_img_rgb = np.zeros((len(cell_mask), len(cell_mask[0]), 3))
+                            # test_img_rgb[:, :, 0] = test_img / np.max(test_img)
+                            # test_img_rgb[:, :, 1] = cell_mask / np.max(cell_mask)
+                            # fig, ax = plt.subplots(1,3)
+                            # ax[0].imshow(cell_mask)
+                            # ax[1].imshow(msi_cell)
+                            # ax[2].imshow(test_img_rgb)
+                            # plt.show()
                             top_left_x_ms = x_ms - msi_cell.shape[1] // 2
                             top_left_y_ms = y_ms - msi_cell.shape[0] // 2
                             bottom_right_x_ms = x_ms + msi_cell.shape[1] // 2
@@ -574,6 +633,15 @@ class Validator:
                                     x_ms_coord, y_ms_coord)  # store global ms_coordinates
                                 # store total msi cell intensity
                                 self.cell_intensities[cell_id] = cell_intensity
+                                test_img = skimage.transform.resize(self.ms_canvas[:,:,0], (len(self.mask_canvas)//2, len(self.mask_canvas[0])//2), order=0, anti_aliasing=False)
+                                test_img_rgb = np.zeros((len(self.mask_canvas)//2, len(self.mask_canvas[0])//2, 3))
+                                test_img_rgb[:, :, 0] = test_img / np.max(test_img)
+                                test_img_rgb[:, :, 1] = np.clip(self.mask_canvas[int(0.25*len(self.mask_canvas)):int(0.75*len(self.mask_canvas)), int(0.25*len(self.mask_canvas[0])):int(0.75*len(self.mask_canvas[0]))] / np.max(self.mask_canvas), a_min=0, a_max=1)
+                                fig, ax = plt.subplots(1,3)
+                                ax[0].imshow(self.mask_canvas)
+                                ax[1].imshow(self.ms_canvas[:,:,0])
+                                ax[2].imshow(test_img_rgb)
+                                plt.show()
             current_id = current_mask_index + 1
 
         #print(f"A total number of {i} cells have been placed")
@@ -585,11 +653,14 @@ class Validator:
             plt.axis('off')
             f_mask_canvas = plt.figure()
             #plt.title("Ground Truth Mask Canvas")
-            plt.imshow(self.mask_canvas)
+            masked_canvas = np.ma.masked_where(self.mask_canvas == 0, self.mask_canvas)
+            my_cmap = plt.cm.prism.copy()
+            my_cmap.set_bad(color='black')  # Set the color for masked values
+            plt.imshow(masked_canvas, cmap=my_cmap)
             plt.axis('off')
             f_msi_canvas = plt.figure()
             #plt.title("MSI Canvas")
-            plt.imshow(self.ms_canvas[:,:,0])
+            plt.imshow(self.ms_canvas[:,:,0], vmax=np.percentile(self.ms_canvas[:,:,0], 99.), cmap='inferno')
             plt.axis('off')
             x_coords = []
             y_coords = []
@@ -597,15 +668,15 @@ class Validator:
                 x_coords.append(item[0])
                 y_coords.append(item[1])
             plt.scatter(x_coords, y_coords, color='red', s=10, marker='x')
-            plt.figure()
-            plt.imshow(self.ms_mask_canvas, cmap='prism')
-            plt.title("Mask MS Canvas")
-            img = np.zeros((len(self.ms_canvas), len(self.ms_canvas[0]), 3))
-            img[:, :, 0] = self.ms_canvas[:, :, 0] / np.max(self.ms_canvas[:, :, 0])
-            img[:, :, 1] = self.ms_mask_canvas / np.max(self.ms_mask_canvas)
-            plt.figure()
-            plt.imshow(img)
-            plt.title("MS Canvas with Mask")
+            #plt.figure()
+            #plt.imshow(self.ms_mask_canvas, cmap='prism')
+            #plt.title("Mask MS Canvas")
+            #img = np.zeros((len(self.ms_canvas), len(self.ms_canvas[0]), 3))
+            #img[:, :, 0] = self.ms_canvas[:, :, 0] / np.max(self.ms_canvas[:, :, 0])
+            #img[:, :, 1] = self.ms_mask_canvas / np.max(self.ms_mask_canvas)
+            #plt.figure()
+            #plt.imshow(img)
+            #plt.title("MS Canvas with Mask")
             if self.save_img:
                 f_mic_canvas.savefig(self.output + "/mic_canvas.svg", bbox_inches='tight', pad_inches=0)
                 f_mask_canvas.savefig(self.output + "/mask_canvas.svg", bbox_inches='tight', pad_inches=0)
@@ -632,29 +703,42 @@ class Validator:
             mask_canvas_pertubated.GetPixelID()
         )
         mask_canvas_pertubated = sitk.GetArrayFromImage(mask_canvas_pertubated)
-        plt.figure()
-        plt.imshow(mask_canvas_pertubated)
+        #plt.figure()
+        #plt.imshow(mask_canvas_pertubated)
 
         for i in range(len(self.mass_list)):
             img = sitk.GetImageFromArray(self.ms_canvas[:,:,i])
             img.SetSpacing((self.ms_spacing, self.ms_spacing))
             self.pertubation_transform_maldi, pertubated_img = self.pertubate_img(img)
             self.maldi_canvas[:,:,i] = sitk.GetArrayFromImage(pertubated_img)
-
+            if self.texture == 'all':
+                self.maldi_canvas[:,:,i] = self.add_texture(self.maldi_canvas[:,:,i], self.texture_path)
         #for mask_id in self.cell_intensities.keys():
         #    self.cell_intensities[mask_id] = np.sum(self.maldi_canvas[mask_canvas_pertubated == mask_id, 0])
 
         maldi_img = self.maldi_canvas[:,:,0]
+        if self.texture == 'registration':
+            maldi_img = self.add_texture(maldi_img, self.texture_path)
 
         if self.plot or self.save_img:
             fig = plt.figure()
-            plt.imshow(maldi_img)
+            plt.imshow(maldi_img, vmax=np.percentile(maldi_img, 99.), cmap='inferno')
             #plt.title("Pertubated MS Canvas")
             plt.axis('off')
             if self.save_img:
                 fig.savefig(self.output + "/pertubated_ms_canvas.svg", bbox_inches='tight', pad_inches=0)
         stop = time.perf_counter()
         self.canvas_metrics['time'] = stop - start
+
+        img = np.zeros((len(self.mic_canvas), len(self.mic_canvas[0]), 3))
+        maldi_scaled = skimage.transform.rescale(self.ms_canvas[:,:,0], self.ms_spacing/self.mic_spacing, order=0, anti_aliasing=False)
+        start_y = int(0.25 * len(img))
+        start_x = int(0.25 * len(img[0]))
+        img[start_y:start_y+len(maldi_scaled), start_x:start_x+len(maldi_scaled[0]), 0] = maldi_scaled / np.max(maldi_scaled)
+        img[:,:,1] = self.mic_canvas[:,:,1]
+        img[:,:,2] = self.mic_canvas[:,:,2]
+        plt.figure()
+        plt.imshow(img)
         #print("perform registration...")
         start = time.perf_counter()
         maldi_sitk = sitk.GetImageFromArray(maldi_img)
@@ -778,15 +862,16 @@ class Validator:
                 plt.savefig(self.output + "/registration_overlay.svg", bbox_inches='tight', pad_inches=0)
 
 
+
+        self.interpret_registration_matrix(self.final_transform.GetNthTransform(0))
+
+        self.evaluate_registration()
+
         # correct for pixel starting point in top left corner instead of pixel center
         adjusted_translation = (self.ms_spacing / 2, self.ms_spacing / 2)
         translation_transform = sitk.TranslationTransform(2)
         translation_transform.SetOffset(adjusted_translation)
         self.final_transform.AddTransform(translation_transform)
-        
-        self.interpret_registration_matrix(self.final_transform.GetNthTransform(0))
-
-        self.evaluate_registration()
 
         mic_transformed = sitk.Resample(mic_sitk,
                                      moving_sitk,
@@ -807,6 +892,7 @@ class Validator:
         stop = time.perf_counter()
         self.registration_metrics['time'] = stop-start
 
+
         #print("Running Segmentation...")
         start = time.perf_counter()
         if self.use_perfect_segmentation:
@@ -815,10 +901,10 @@ class Validator:
             model = models.Cellpose(gpu=False, model_type='cyto2')
             masks, flows, styles, diams = model.eval(mic_cut, diameter=self.cell_diameter)
 
-        plt.figure()
-        plt.imshow(masks)
-        plt.figure()
-        plt.imshow(mask_cut)
+        #plt.figure()
+        #plt.imshow(masks)
+        #plt.figure()
+        #plt.imshow(mask_cut)
         labels = set(np.unique(masks))
         masks_cleared = skimage.segmentation.clear_border(masks)
         reduced_labels = set(np.unique(masks_cleared))
@@ -880,7 +966,7 @@ class Validator:
                 if self.render_animation == True:
                     fig, ax = plt.subplots(1,2)
                     ax[0].imshow(masks_cleared)
-                    ax[1].imshow(self.maldi_canvas[:,:,0], cmap='viridis')
+                    ax[1].imshow(self.maldi_canvas[:,:,0], cmap='inferno', vmax=np.percentile(self.maldi_canvas[:,:,0], 99.))
                     ax[1].add_patch(patches.Rectangle((j-0.5, i-0.5), 1, 1, linewidth=0, edgecolor='red', facecolor='red', alpha=1))  # Render the whole pixel red
                     rect = patches.Rectangle((j*ms_scale_factor, i*ms_scale_factor), ms_scale_factor, ms_scale_factor, linewidth=1, edgecolor='red', facecolor='none', alpha=1)
                     ax[0].add_patch(rect)
@@ -925,7 +1011,7 @@ class Validator:
                 true_int = self.cell_intensities[key]
                 meas_int = cells[mask_id][0]
                 spectra_comparison.append((true_int-meas_int)/true_int)
-                print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
             else:
                 mask_id = 0
                 canvas_to_mask[key] = mask_id
@@ -933,7 +1019,7 @@ class Validator:
                 meas_int = 0
                 cells_missed += 1
                 spectra_comparison.append((true_int-meas_int)/true_int)
-                print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
             
         
         spectra_comparison = np.array(spectra_comparison) * 100
@@ -957,5 +1043,20 @@ class Validator:
 
         return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics
 
-A = Validator(use_perfect_segmentation=True, use_perfect_registration=False, seed=42, scale=1, teaching_imprecision=10, rotation=10, ms_spacing=10, plot=True, save_img=False, canvas_size=1000, cell_density=0.1)
+A = Validator(
+    use_perfect_segmentation=True, 
+    use_perfect_registration=True, 
+    seed=42, 
+    scale=1, 
+    teaching_imprecision=10, 
+    rotation=10, 
+    ms_spacing=5, 
+    plot=True, 
+    save_img=False, 
+    canvas_size=1000, 
+    cell_density=0.1, 
+    diffusion=0)
+    #texture='registration',
+    #texture_path="./textures/noise_150x150.jpg",
+    #texture_epsilon=1)
 A.main()
