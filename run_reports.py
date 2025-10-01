@@ -2,12 +2,16 @@ import os
 
 # Define the parameters and their values for each run
 i = 0
-for ms_spacing in [1, 5, 20]:
-    for rotation in [0, 1, 5, 10]:
-        for scale in [1, 0.99, 1.1]:
+cell_path_prefix = "D:/Jan/fiscas-validationKit/Cell_images/microscopy/"
+for cell_line in ["HuTu80/"]:
+    for j in range(1,6):
+        for teaching_imprecision in [0, 5, 10, 20, 50]:
+            print(teaching_imprecision)
+            cell_path = cell_path_prefix + cell_line
+            print(cell_path)
             # Construct the parameter overrides for the command
-            param_overrides = f"-P ms_spacing:{ms_spacing} -P rotation:{rotation} -P scale:{scale} -P seed:42"
-            
+            param_overrides = f"-P path_sample_cells:{cell_path} -P allow_multiplets:True -P diffusion:0 -P teaching_imprecision:{teaching_imprecision} -P remove_ambiguous:True -P rotation:10 -P ms_spacing:5 -P seed:{j} -P use_perfect_segmentation:True -P scale:1 -P use_perfect_registration:False -P save_img:True -P canvas_size:1500 -P cell_density:0.2"
+            print(param_overrides)
             # Path to the Quarto file
             quarto_file = "Report.qmd"
             

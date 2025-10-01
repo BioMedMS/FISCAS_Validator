@@ -10,27 +10,32 @@
 ```{python}
 #| tags: [parameters]
 
-path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy/"
+
+path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy/HuTu80/"
 output="D:/Jan/fiscas-validationKit/output/"
+allow_multiplets=True
 use_perfect_registration=False
-use_perfect_segmentation=False
-teaching_imprecision=5
-canvas_size=2500
+use_perfect_segmentation=True
+teaching_imprecision=10
+canvas_size=1500
 mic_spacing=0.325
-ms_spacing=1
-cell_density=0.1
+ms_spacing=5
+cell_density=0.3
 max_cell_placement_iterations=1000
-rotation=2
-scale=1.02
+rotation=10
+scale=1.00
 mass_list=[577.5, 760.68]
-diffusion=0
+diffusion=5
 noise_loc=0.0
 noise_scale=0.0
-seed=0
+seed=42
 plot=True
 save_img=True
 remove_ambiguous=True
 cell_diameter=120
+texture=None
+texture_path="./textures/noise_150x150.jpg"
+texture_epsilon=0.1
 
 def convert_to_float_and_round(value, decimal=4):
     if isinstance(value, (list, tuple)):
@@ -51,6 +56,7 @@ from IPython.display import HTML, display, SVG
 
 A = Validator(path_sample_cells=path_sample_cells,
 output=output,
+allow_multiplets=allow_multiplets,
 use_perfect_registration=use_perfect_registration,
 use_perfect_segmentation=use_perfect_segmentation,
 teaching_imprecision=teaching_imprecision,
@@ -69,7 +75,9 @@ seed=seed,
 plot=plot,
 save_img=save_img,
 remove_ambiguous=remove_ambiguous,
-cell_diameter=cell_diameter)
+cell_diameter=cell_diameter,
+texture=texture,
+texture_path=texture_path)
 canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics = A.main()
 ```
 

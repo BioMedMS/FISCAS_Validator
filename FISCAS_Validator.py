@@ -45,6 +45,7 @@ class Validator:
     def __init__(self,
         path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy/HuTu80",
         output="D:/Jan/fiscas-validationKit/output/",
+        allow_multiplets=True,
         use_perfect_registration=False,
         use_perfect_segmentation=False,
         teaching_imprecision=5,  # in µm
@@ -69,9 +70,9 @@ class Validator:
         texture_path="./texture.jpg",
         texture_epsilon=1):  #-1 < epsilon < 1
         
-        
         self.path_sample_cells = path_sample_cells
         self.output = output
+        self.allow_multiplets = allow_multiplets
         self.use_perfect_registration = use_perfect_registration
         self.use_perfect_segmentation = use_perfect_segmentation
         self.teaching_imprecision = teaching_imprecision
@@ -109,6 +110,7 @@ class Validator:
         settings = {
             "path_sample_cells": self.path_sample_cells,
             "output": self.output,
+            "allow_multiplets": self.allow_multiplets,
             "use_perfect_registration": self.use_perfect_registration,
             "use_perfect_segmentation": self.use_perfect_segmentation,
             "teaching_imprecision": self.teaching_imprecision,
@@ -134,18 +136,24 @@ class Validator:
         }
         return settings
 
+
     # loads random cell images and their corresponding masks from folder with prepared cell images and applies random rotation and scale
     # returns randomized cell image with its corresponding mask
     def load_random_cell(self, mask_index=255, seed=None):
         if seed is None:
-            cell_chosen = random.randint(0, len(self.cell_image_paths)-1)
             angle = random.randint(0, 360)
             scaling_factor = random.uniform(0.8, 1.2)
+            while True:
+                cell_chosen = random.randint(0, len(self.cell_image_paths)-1)
+                is_multiplet = "doublet" in self.cell_masks_paths[cell_chosen] or "triplet" in self.cell_masks_paths[cell_chosen] or "multiplet" in self.cell_masks_paths[cell_chosen]
+                if is_multiplet and not self.allow_multiplets:
+                    continue  # Retry if the cell is a multiplet and multiplets are not allowed
+                else:
+                    break
         else:
-            cell_chosen = seed
             angle = 0
             scaling_factor = 1
-        is_multiplet = "doublet" in self.cell_masks_paths[cell_chosen] or "triplet" in self.cell_masks_paths[cell_chosen] or "multiplet" in self.cell_masks_paths[cell_chosen]
+            cell_chosen = seed
         cell_mask = np.array(Image.open(self.cell_masks_paths[cell_chosen]), dtype=np.uint16)
         if is_multiplet:
             mask_ids = np.unique(cell_mask)
@@ -178,10 +186,7 @@ class Validator:
         if r < 1:
             return mask
         kernel = np.fromfunction(lambda x, y: ((x-r)**2 + (y-r)**2 <= r**2)*1, (2*r+1, 2*r+1), dtype=int).astype(np.uint8)
-        padding = r
-        mask_padded = np.zeros((len(mask)+2*padding, len(mask[0])+2*padding))
-        mask_padded[padding:padding+len(mask), padding:padding+len(mask[0])] = mask
-        dil_sample = cv2.dilate(np.float32(mask_padded), kernel, iterations = 1)
+        dil_sample = cv2.dilate(np.float32(mask), kernel, iterations = 1)
         dil_sample = (dil_sample/np.max(dil_sample) * mask_idx).astype(np.uint16)
         return dil_sample
 
@@ -428,7 +433,12 @@ class Validator:
             x, y = value
             x_global, y_global = x * self.ms_spacing, y * self.ms_spacing
             x_pertubated, y_pertubated = self.pertubation_transform_maldi.GetInverse().TransformPoint((x_global, y_global))
-            landmark_moving = np.array(self.final_transform.GetInverse().TransformPoint((x_pertubated, y_pertubated)))
+            landmark_moving = self.final_transform.GetInverse().TransformPoint((x_pertubated, y_pertubated))
+            adjusted_translation = (-self.ms_spacing / 2, -self.ms_spacing / 2)
+            #adjusted_translation = (0,0)
+            translation_transform = sitk.TranslationTransform(2)
+            translation_transform.SetOffset(adjusted_translation)
+            landmark_moving = np.array(translation_transform.TransformPoint(landmark_moving))
             landmark_fixed = np.array(self.mic_coordinates[key]) * self.mic_spacing
             error.append(landmark_fixed - landmark_moving)
         error = np.array(error)
@@ -550,10 +560,6 @@ class Validator:
         density = 0
         i = 0
         current_id = 1
-        if self.diffusion > 0:
-            padding = int(self.diffusion/self.mic_spacing)
-        else:
-            padding = 0
         while density < self.cell_density:
             if i > self.max_cell_placement_iterations:
                 # print(f"aborted populating canvas. Too many cell placement cycles ({i})")
@@ -564,83 +570,88 @@ class Validator:
             # choose random canvas coordinate to place the cell
             x = random.randint(0, len(self.mic_canvas[0]))
             y = random.randint(0, len(self.mic_canvas))
+            p = (x, y)
             cell, mask, mask_ms_spacing, current_mask_index = self.load_random_cell(mask_index=current_id)
             # prevent cell images to violate canvas border
-            top_left_x = x - cell.shape[1] // 2
-            top_left_y = y - cell.shape[0] // 2
-            bottom_right_x = x + cell.shape[1] // 2
-            bottom_right_y = y + cell.shape[0] // 2
-            if (top_left_x > 0) & (top_left_y > 0) & (bottom_right_x < len(self.mic_canvas[0])) & (bottom_right_y < len(self.mic_canvas)):
-                canvas_area = self.mask_canvas[top_left_y:top_left_y+len(
-                    mask), top_left_x:top_left_x+len(mask[0])]
+            p_top_left = (int(p[0] - cell.shape[1] // 2), int(p[1] - cell.shape[0] // 2))
+            p_bottom_right = (int(p[0] + cell.shape[1] // 2), int(p[1] + cell.shape[0] // 2))
+            if self.diffusion != 0: # add padding to prevent diffusion outside of cell image borders
+                padding = int(self.diffusion / self.mic_spacing)
+                p_top_left = (p_top_left[0]-padding, p_top_left[1]-padding)
+                p_bottom_right = (p_bottom_right[0]+padding, p_bottom_right[1]+padding)
+            if (p_top_left[0] > 0) & (p_top_left[1] > 0) & (p_bottom_right[0] < len(self.mic_canvas[0])) & (p_bottom_right[1] < len(self.mic_canvas)):
+                canvas_area = self.mask_canvas[p_top_left[1]:p_top_left[1]+len(
+                    mask), p_top_left[0]:p_top_left[0]+len(mask[0])]
                 if not np.any(np.logical_and(canvas_area, mask)):
                     # draw cell on mic_canvas; += prevents the background to override existing cells
-                    self.mic_canvas[top_left_y:top_left_y+len(cell), top_left_x:(
-                        top_left_x+len(cell[0])), 1] += cell[:, :, 0]
-                    self.mic_canvas[top_left_y:top_left_y+len(
-                        cell), top_left_x:top_left_x+len(cell[0]), 2] += cell[:, :, 1]
-                    self.mask_canvas[top_left_y:top_left_y +
-                                        len(mask), top_left_x:top_left_x+len(mask[0])] += mask
+                    self.mic_canvas[p_top_left[1]:p_top_left[1]+len(cell), p_top_left[0]:(
+                        p_top_left[0]+len(cell[0])), 1] += cell[:, :, 0]
+                    self.mic_canvas[p_top_left[1]:p_top_left[1]+len(
+                        cell), p_top_left[0]:p_top_left[0]+len(cell[0]), 2] += cell[:, :, 1]
+                    self.mask_canvas[p_top_left[1]:p_top_left[1] +
+                                        len(mask), p_top_left[0]:p_top_left[0]+len(mask[0])] += mask
                     
                     for cell_id in range(current_id, current_mask_index+1):
                         # store the mic x,y coordinates
                         self.mic_coordinates[cell_id] = (x, y)
                     density = self.calculate_cell_density()
                     # add msi data
-                    if (x > 0.25 * len(self.mic_canvas[0])) & (x < 0.75 * len(self.mic_canvas[0])) & (y > 0.25 * len(self.mic_canvas)) & (y < 0.75 * len(self.mic_canvas)):
+                    if (p_top_left[0] > 0.26 * len(self.mic_canvas[0])) & (p_top_left[0] < 0.74 * len(self.mic_canvas[0])) & (p_top_left[1] > 0.26 * len(self.mic_canvas)) & (p_top_left[1] < 0.74 * len(self.mic_canvas)):
                         # conversion to global ms coordinate system
-                        x_ms_coord = round(
-                            (x)/(self.ms_spacing/self.mic_spacing))
-                        y_ms_coord = round(
-                            (y)/(self.ms_spacing/self.mic_spacing))
-                        offset_x = round(
-                            len(self.mic_canvas[0])*0.25*self.mic_spacing/self.ms_spacing)
-                        offset_y = round(
-                            len(self.mic_canvas)*0.25*self.mic_spacing/self.ms_spacing)
-                        x_ms = x_ms_coord - offset_x  # conversion to local ms coordinate system
-                        y_ms = y_ms_coord - offset_y
+                        offset_x = round(len(self.mic_canvas[0])*0.25*self.mic_spacing/self.ms_spacing)
+                        offset_y = round(len(self.mic_canvas)*0.25*self.mic_spacing/self.ms_spacing)
+                        p_top_left_ms = np.array((
+                            round((p_top_left[0])/(self.ms_spacing/self.mic_spacing)) - offset_x,
+                            round((p_top_left[1])/(self.ms_spacing/self.mic_spacing)) - offset_y
+                            ), dtype=np.uint16)
+                        p_top_left_mic = np.array((
+                            (p_top_left_ms[0] - 0.5 + offset_x) * self.ms_spacing/self.mic_spacing,
+                            (p_top_left_ms[1] - 0.5 + offset_y) * self.ms_spacing/self.mic_spacing
+                            ), dtype=np.uint16)
+                        p_bottom_right_ms = np.array((
+                            round((p_bottom_right[0])/(self.ms_spacing/self.mic_spacing)) - offset_x,
+                            round((p_bottom_right[1])/(self.ms_spacing/self.mic_spacing)) - offset_y
+                            ), dtype=np.uint16)
+                        p_bottom_right_mic = np.array((
+                            (p_bottom_right_ms[0] + 0.5 + offset_x) * self.ms_spacing/self.mic_spacing,
+                            (p_bottom_right_ms[1] + 0.5 + offset_y) * self.ms_spacing/self.mic_spacing
+                            ), dtype=np.uint16)
+                        p_ms = np.array((round((p[0])/(self.ms_spacing/self.mic_spacing)) - offset_x ,
+                                round((p[1])/(self.ms_spacing/self.mic_spacing)) - offset_y), dtype=np.uint16)
 
                         for cell_id in range(current_id, current_mask_index+1):
-                            cell_mask = np.zeros_like(mask)
-                            cell_mask[mask == cell_id] = cell_id
+                            cell_mask = np.zeros((int(p_bottom_right_mic[1]-p_top_left_mic[1]), int(p_bottom_right_mic[0]-p_top_left_mic[0])))
+                            mask_region = self.mask_canvas[p_top_left_mic[1]:p_bottom_right_mic[1], p_top_left_mic[0]:p_bottom_right_mic[0]]
+                            cell_mask[mask_region == cell_id] = cell_id
                             msi_cell, cell_intensity = self.generate_maldi_cell(
                                 cell_mask, sigma=70, diffusion=self.diffusion)
-                            # test_img = skimage.transform.resize(msi_cell, cell_mask.shape, order=0, anti_aliasing=False)
-                            # test_img_rgb = np.zeros((len(cell_mask), len(cell_mask[0]), 3))
-                            # test_img_rgb[:, :, 0] = test_img / np.max(test_img)
-                            # test_img_rgb[:, :, 1] = cell_mask / np.max(cell_mask)
-                            # fig, ax = plt.subplots(1,3)
-                            # ax[0].imshow(cell_mask)
-                            # ax[1].imshow(msi_cell)
-                            # ax[2].imshow(test_img_rgb)
-                            # plt.show()
-                            top_left_x_ms = x_ms - msi_cell.shape[1] // 2
-                            top_left_y_ms = y_ms - msi_cell.shape[0] // 2
-                            bottom_right_x_ms = x_ms + msi_cell.shape[1] // 2
-                            bottom_right_y_ms = y_ms + msi_cell.shape[0] // 2
-                            if (top_left_x_ms >= 0) & (top_left_y_ms >= 0) & (bottom_right_x_ms < len(self.ms_canvas[0])) & (bottom_right_y_ms < len(self.ms_canvas)):
-                                if k == 0:
-                                    self.ms_mask_canvas[top_left_y_ms:top_left_y_ms+len(
-                                    mask_ms_spacing), top_left_x_ms:top_left_x_ms+len(mask_ms_spacing[0])] += mask_ms_spacing
+                            p_top_left_ms = (p_top_left_ms[0], p_top_left_ms[1])
+                            p_bottom_right_ms = (p_top_left_ms[0]+len(msi_cell[0]), p_top_left_ms[1]+len(msi_cell))
+                            if (p_top_left_ms[0] >= 0) & (p_top_left_ms[1] >= 0) & (p_bottom_right_ms[0] < len(self.ms_canvas[0])) & (p_bottom_right_ms[1] < len(self.ms_canvas)):
+                                #if k == 0:
+                                    #plt.figure()
+                                    #plt.imshow(mask_ms_spacing)
+                                    #print(f"mask ms spacing shape {mask_ms_spacing.shape}, unique ids {np.unique(mask_ms_spacing)}")
+                                    #self.ms_mask_canvas[p_top_left_ms[1]:p_top_left_ms[1]+len(
+                                    #mask_ms_spacing), p_top_left_ms[0]:p_top_left_ms[0]+len(mask_ms_spacing[0])] += mask_ms_spacing
                                 for j in range(len(self.mass_list)):
                                     # add cell intensity to ms canvas; += to add intensities of overlapping diffusion
-                                    self.ms_canvas[top_left_y_ms:top_left_y_ms+len(
-                                        msi_cell), top_left_x_ms:top_left_x_ms+len(msi_cell[0]), j] += msi_cell
+                                    self.ms_canvas[p_top_left_ms[1]-1:p_top_left_ms[1]-1+len(
+                                        msi_cell), p_top_left_ms[0]-1:p_top_left_ms[0]-1+len(msi_cell[0]), j] += msi_cell
                                 k = 1
                                 # store local ms coordinates
-                                self.msi_coordinates[cell_id] = (x_ms, y_ms)
-                                self.msi_canvas_coordinates[cell_id] = (
-                                    x_ms_coord, y_ms_coord)  # store global ms_coordinates
+                                self.msi_coordinates[cell_id] = (int(p_ms[0]), int(p_ms[1]))
+                                self.msi_canvas_coordinates[cell_id] = (int(p_ms[0] + offset_x), int(p_ms[1] + offset_y))  # store global ms_coordinates
                                 # store total msi cell intensity
                                 self.cell_intensities[cell_id] = cell_intensity
-                                test_img = skimage.transform.resize(self.ms_canvas[:,:,0], (len(self.mask_canvas)//2, len(self.mask_canvas[0])//2), order=0, anti_aliasing=False)
-                                test_img_rgb = np.zeros((len(self.mask_canvas)//2, len(self.mask_canvas[0])//2, 3))
-                                test_img_rgb[:, :, 0] = test_img / np.max(test_img)
-                                test_img_rgb[:, :, 1] = np.clip(self.mask_canvas[int(0.25*len(self.mask_canvas)):int(0.75*len(self.mask_canvas)), int(0.25*len(self.mask_canvas[0])):int(0.75*len(self.mask_canvas[0]))] / np.max(self.mask_canvas), a_min=0, a_max=1)
-                                fig, ax = plt.subplots(1,3)
-                                ax[0].imshow(self.mask_canvas)
-                                ax[1].imshow(self.ms_canvas[:,:,0])
-                                ax[2].imshow(test_img_rgb)
+                                #test_img = skimage.transform.resize(self.ms_canvas[:,:,0], (len(self.mask_canvas)//2, len(self.mask_canvas[0])//2), order=0, anti_aliasing=False)
+                                #test_img_rgb = np.zeros((len(self.mask_canvas)//2, len(self.mask_canvas[0])//2, 3))
+                                #test_img_rgb[:, :, 0] = test_img / np.max(test_img)
+                                #test_img_rgb[:, :, 1] = np.clip(self.mask_canvas[int(0.25*len(self.mask_canvas)):int(0.75*len(self.mask_canvas)), int(0.25*len(self.mask_canvas[0])):int(0.75*len(self.mask_canvas[0]))] / np.max(self.mask_canvas), a_min=0, a_max=1)
+                                #fig, ax = plt.subplots(1,3)
+                                #ax[0].imshow(self.mask_canvas[int(0.25*len(self.mask_canvas)):int(0.75*len(self.mask_canvas)), int(0.25*len(self.mask_canvas[0])):int(0.75*len(self.mask_canvas[0]))])
+                                #ax[1].imshow(self.ms_canvas[:,:,0])
+                                #ax[2].imshow(test_img_rgb)
                                 plt.show()
             current_id = current_mask_index + 1
 
@@ -832,7 +843,7 @@ class Validator:
             center_fixed = self.get_image_center(mic_sitk)
             center_moving = self.get_image_center(moving_sitk)
             self.moving_array = sitk.GetArrayFromImage(moving_sitk)
-            translation = np.array(center_fixed) - np.array(center_moving)
+            translation = np.array(center_fixed) - np.array(center_moving) + np.array((self.ms_spacing/2, self.ms_spacing/2))
             translation_transform.SetOffset(-translation)
             self.final_transform = sitk.CompositeTransform(2)
             self.pertubation_transform_moving, _ = self.pertubate_img(moving_sitk)
@@ -869,6 +880,7 @@ class Validator:
 
         # correct for pixel starting point in top left corner instead of pixel center
         adjusted_translation = (self.ms_spacing / 2, self.ms_spacing / 2)
+        #adjusted_translation = (0,0)
         translation_transform = sitk.TranslationTransform(2)
         translation_transform.SetOffset(adjusted_translation)
         self.final_transform.AddTransform(translation_transform)
@@ -1046,7 +1058,8 @@ class Validator:
 A = Validator(
     use_perfect_segmentation=True, 
     use_perfect_registration=True, 
-    seed=42, 
+    allow_multiplets=True,
+    seed=4502, 
     scale=1, 
     teaching_imprecision=10, 
     rotation=10, 
