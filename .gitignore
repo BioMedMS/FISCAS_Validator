@@ -3,3 +3,7 @@
 /.quarto/
 /output
 /reports
+/textures
+test.py
+*.pyc
+__pycache__/
