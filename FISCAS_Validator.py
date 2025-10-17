@@ -43,6 +43,7 @@ from matplotlib.colors import LinearSegmentedColormap
 
 class Validator:
     def __init__(self,
+        cell_types,
         path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy/HuTu80",
         output="D:/Jan/fiscas-validationKit/output/",
         allow_multiplets=True,
@@ -70,6 +71,7 @@ class Validator:
         texture_path="./texture.jpg",
         texture_epsilon=1):  #-1 < epsilon < 1
         
+        self.cell_types = cell_types
         self.path_sample_cells = path_sample_cells
         self.output = output
         self.allow_multiplets = allow_multiplets
@@ -108,6 +110,7 @@ class Validator:
 
     def return_settings(self):
         settings = {
+            "cell_types": self.cell_types,
             "path_sample_cells": self.path_sample_cells,
             "output": self.output,
             "allow_multiplets": self.allow_multiplets,
@@ -226,10 +229,21 @@ class Validator:
         center_of_mass = coords.mean(axis=0)
         cx, cy = center_of_mass
         intensities = np.zeros_like(mask, dtype=float)
+        intensities_all_mz = np.zeros((len(mask), len(mask[0]), len(self.mass_list)))
+        
         for x, y in coords:
             distance = np.sqrt((x-cx)**2 + (y-cy)**2) * self.mic_spacing
             intensities[x, y] = np.exp(-(distance / sigma)**2) + 0.1
-        rescaled_intensities = self.sum_pooling(intensities, int(self.ms_spacing/self.mic_spacing))
+        
+        cell = random.choices(self.cell_types, weights=[ct.population for ct in self.cell_types], k=1)[0]
+        for i in range(len(self.mass_list)):
+            factor = cell.get_intensity(self.mass_list[i])
+            rescaled_intensities = intensities * factor
+            intensities_all_mz[:,:, i] = rescaled_intensities
+            pooled_intensities = self.sum_pooling(rescaled_intensities, int(self.ms_spacing/self.mic_spacing))
+            if i == 0:
+                pooled_intensities_all_mz = np.zeros((len(pooled_intensities), len(pooled_intensities[0]), len(self.mass_list)))
+            pooled_intensities_all_mz[:,:, i] = pooled_intensities
         # test_img = skimage.transform.resize(rescaled_intensities, mask.shape, order=0, anti_aliasing=False)
         # test_img_rgb = np.zeros((len(mask), len(mask[0]), 3))
         # test_img_rgb[:, :, 0] = test_img / np.max(test_img)
@@ -240,7 +254,7 @@ class Validator:
         # ax[2].imshow(rescaled_intensities)
         # ax[3].imshow(test_img_rgb)
         # plt.show()
-        return rescaled_intensities, np.sum(intensities)
+        return pooled_intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
 
     def calculate_cell_density(self):
@@ -462,7 +476,7 @@ class Validator:
             #ax.scatter(np.mean(error[:,0]), np.mean(error[:,1]), facecolor='none', color='red', s=50, marker='o')
             plt.axis('off')
             if self.save_img:
-                plt.savefig(self.output + "/Registration_error_plot.svg", bbox_inches='tight', pad_inches=0)
+                plt.savefig(self.output + "/Registration_error_plot.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         #print(f"Mean error in µm: {np.mean(error, axis=0)} +/- {np.std(error, axis=0)}")
         self.registration_metrics["mre"] = np.mean(np.abs(error), axis=0)
         self.registration_metrics["mre_std"] = np.std(np.abs(error), axis=0)
@@ -556,7 +570,7 @@ class Validator:
 
         if self.seed == 0:
             self.seed = random.randint(1, 10000)
-        random.seed(self.seed)
+        #random.seed(self.seed)
         density = 0
         i = 0
         current_id = 1
@@ -623,38 +637,30 @@ class Validator:
                             cell_mask = np.zeros((int(p_bottom_right_mic[1]-p_top_left_mic[1]), int(p_bottom_right_mic[0]-p_top_left_mic[0])))
                             mask_region = self.mask_canvas[p_top_left_mic[1]:p_bottom_right_mic[1], p_top_left_mic[0]:p_bottom_right_mic[0]]
                             cell_mask[mask_region == cell_id] = cell_id
-                            msi_cell, cell_intensity = self.generate_maldi_cell(
+                            msi_cell, cell_intensities = self.generate_maldi_cell(
                                 cell_mask, sigma=70, diffusion=self.diffusion)
+                            print(f"Cell ID {cell_id} with intensities {cell_intensities}")
                             p_top_left_ms = (p_top_left_ms[0], p_top_left_ms[1])
                             p_bottom_right_ms = (p_top_left_ms[0]+len(msi_cell[0]), p_top_left_ms[1]+len(msi_cell))
                             if (p_top_left_ms[0] >= 0) & (p_top_left_ms[1] >= 0) & (p_bottom_right_ms[0] < len(self.ms_canvas[0])) & (p_bottom_right_ms[1] < len(self.ms_canvas)):
-                                #if k == 0:
-                                    #plt.figure()
-                                    #plt.imshow(mask_ms_spacing)
-                                    #print(f"mask ms spacing shape {mask_ms_spacing.shape}, unique ids {np.unique(mask_ms_spacing)}")
-                                    #self.ms_mask_canvas[p_top_left_ms[1]:p_top_left_ms[1]+len(
-                                    #mask_ms_spacing), p_top_left_ms[0]:p_top_left_ms[0]+len(mask_ms_spacing[0])] += mask_ms_spacing
                                 for j in range(len(self.mass_list)):
                                     # add cell intensity to ms canvas; += to add intensities of overlapping diffusion
                                     self.ms_canvas[p_top_left_ms[1]-1:p_top_left_ms[1]-1+len(
-                                        msi_cell), p_top_left_ms[0]-1:p_top_left_ms[0]-1+len(msi_cell[0]), j] += msi_cell
+                                        msi_cell), p_top_left_ms[0]-1:p_top_left_ms[0]-1+len(msi_cell[0]), j] += msi_cell[:,:,j]
                                 k = 1
                                 # store local ms coordinates
                                 self.msi_coordinates[cell_id] = (int(p_ms[0]), int(p_ms[1]))
                                 self.msi_canvas_coordinates[cell_id] = (int(p_ms[0] + offset_x), int(p_ms[1] + offset_y))  # store global ms_coordinates
                                 # store total msi cell intensity
-                                self.cell_intensities[cell_id] = cell_intensity
-                                #test_img = skimage.transform.resize(self.ms_canvas[:,:,0], (len(self.mask_canvas)//2, len(self.mask_canvas[0])//2), order=0, anti_aliasing=False)
-                                #test_img_rgb = np.zeros((len(self.mask_canvas)//2, len(self.mask_canvas[0])//2, 3))
-                                #test_img_rgb[:, :, 0] = test_img / np.max(test_img)
-                                #test_img_rgb[:, :, 1] = np.clip(self.mask_canvas[int(0.25*len(self.mask_canvas)):int(0.75*len(self.mask_canvas)), int(0.25*len(self.mask_canvas[0])):int(0.75*len(self.mask_canvas[0]))] / np.max(self.mask_canvas), a_min=0, a_max=1)
-                                #fig, ax = plt.subplots(1,3)
-                                #ax[0].imshow(self.mask_canvas[int(0.25*len(self.mask_canvas)):int(0.75*len(self.mask_canvas)), int(0.25*len(self.mask_canvas[0])):int(0.75*len(self.mask_canvas[0]))])
-                                #ax[1].imshow(self.ms_canvas[:,:,0])
-                                #ax[2].imshow(test_img_rgb)
-                                plt.show()
+                                self.cell_intensities[cell_id] = cell_intensities
             current_id = current_mask_index + 1
 
+        #fig, ax = plt.subplots(1,len(self.mass_list))
+        #for i in range(len(self.mass_list)):
+        #    ax[i].imshow(self.ms_canvas[:,:,i], vmax=np.percentile(self.ms_canvas[:,:,i], 99.), cmap='inferno')
+        #    ax[i].set_title(f"m/z {self.mass_list[i]}")
+        #    ax[i].axis('off')
+        #plt.show()
         #print(f"A total number of {i} cells have been placed")
 
         if self.plot or self.save_img:
@@ -689,9 +695,9 @@ class Validator:
             #plt.imshow(img)
             #plt.title("MS Canvas with Mask")
             if self.save_img:
-                f_mic_canvas.savefig(self.output + "/mic_canvas.svg", bbox_inches='tight', pad_inches=0)
-                f_mask_canvas.savefig(self.output + "/mask_canvas.svg", bbox_inches='tight', pad_inches=0)
-                f_msi_canvas.savefig(self.output + "/ms_canvas.svg", bbox_inches='tight', pad_inches=0)
+                f_mic_canvas.savefig(self.output + "/mic_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
+                f_mask_canvas.savefig(self.output + "/mask_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
+                f_msi_canvas.savefig(self.output + "/ms_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         self.canvas_metrics["n_cells"] = len(self.mic_coordinates)
         self.canvas_metrics["n_msi_cells"] = len(self.cell_intensities)
 
@@ -737,7 +743,7 @@ class Validator:
             #plt.title("Pertubated MS Canvas")
             plt.axis('off')
             if self.save_img:
-                fig.savefig(self.output + "/pertubated_ms_canvas.svg", bbox_inches='tight', pad_inches=0)
+                fig.savefig(self.output + "/pertubated_ms_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         stop = time.perf_counter()
         self.canvas_metrics['time'] = stop - start
 
@@ -748,8 +754,8 @@ class Validator:
         img[start_y:start_y+len(maldi_scaled), start_x:start_x+len(maldi_scaled[0]), 0] = maldi_scaled / np.max(maldi_scaled)
         img[:,:,1] = self.mic_canvas[:,:,1]
         img[:,:,2] = self.mic_canvas[:,:,2]
-        plt.figure()
-        plt.imshow(img)
+        #plt.figure()
+        #plt.imshow(img)
         #print("perform registration...")
         start = time.perf_counter()
         maldi_sitk = sitk.GetImageFromArray(maldi_img)
@@ -814,7 +820,7 @@ class Validator:
             plt.axis('off')
             #plt.title("Initial Transform for Registration")
             if self.save_img:
-                plt.savefig(self.output + "/initial_transform.svg", bbox_inches='tight', pad_inches=0)
+                plt.savefig(self.output + "/initial_transform.svg", bbox_inches='tight', pad_inches=0, dpi=600)
 
         registration_method = sitk.ImageRegistrationMethod()
         registration_method.SetMetricAsMattesMutualInformation(numberOfHistogramBins=50)
@@ -830,9 +836,9 @@ class Validator:
             convergenceMinimumValue=1e-6,
             convergenceWindowSize=50
         )
-        registration_method.SetShrinkFactorsPerLevel(shrinkFactors = [4,2,1])
-        registration_method.SetSmoothingSigmasPerLevel(smoothingSigmas=[2,1,0])
-        registration_method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
+        #registration_method.SetShrinkFactorsPerLevel(shrinkFactors = [4,2,1])
+        #registration_method.SetSmoothingSigmasPerLevel(smoothingSigmas=[2,1,0])
+        #registration_method.SmoothingSigmasAreSpecifiedInPhysicalUnitsOn()
         registration_method.SetInitialTransform(composite_transform, inPlace=False)
         registration_method.SetInterpolator(sitk.sitkLinear)
         registration_method.SetMetricSamplingStrategy(registration_method.RANDOM)
@@ -870,7 +876,7 @@ class Validator:
             plt.imshow(sitk.GetArrayViewFromImage(composite_img))
             plt.axis('off')
             if self.save_img:
-                plt.savefig(self.output + "/registration_overlay.svg", bbox_inches='tight', pad_inches=0)
+                plt.savefig(self.output + "/registration_overlay.svg", bbox_inches='tight', pad_inches=0, dpi=600)
 
 
 
@@ -910,6 +916,7 @@ class Validator:
         if self.use_perfect_segmentation:
             masks = mask_cut
         else:
+            #TODO: add a table for cellpose settings in report files 
             model = models.Cellpose(gpu=False, model_type='cyto2')
             masks, flows, styles, diams = model.eval(mic_cut, diameter=self.cell_diameter)
 
@@ -941,7 +948,7 @@ class Validator:
             plt.imshow(overlay_img)
             plt.axis('off')
             if self.save_img:
-                plt.savefig(self.output + "/segmentation_results.svg", bbox_inches='tight', pad_inches=0)
+                plt.savefig(self.output + "/segmentation_results.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         stop = time.perf_counter()
         self.segmentation_metrics['time'] = stop-start
 
@@ -993,8 +1000,9 @@ class Validator:
                             text_cell_id.set_text(f"Cell ID: {cell_id}")
                             text_intensity.set_text(f"Pixel Intensity: {self.maldi_canvas[i,j,0]:.2f}")
                             text_total_intensity.set_text(f"Total Intensity: {cells[cell_id,0]:.2f}")
-                            text_total_cell_intensity.set_text(f"Total Cell Intensity: {self.cell_intensities[cell_id]:.2f}")
-                            text_coverage.set_text(f"GT deviation: {(self.cell_intensities[cell_id]-cells[cell_id,0])*100/self.cell_intensities[cell_id]:.2f}%")
+                            intensity = self.cell_intensities[cell_id][0]
+                            text_total_cell_intensity.set_text(f"Total Cell Intensity: {intensity:.2f}")
+                            text_coverage.set_text(f"GT deviation: {(intensity-cells[cell_id,0])*100/intensity:.2f}%")
                         except Exception as e:
                             continue
                     plt.savefig(f"D:/Jan/fiscas-validationKit/output/animation/img_{k}.jpg", dpi=300)
@@ -1002,47 +1010,58 @@ class Validator:
                 k += 1
 
         canvas_to_mask = {}
-        spectra_comparison = []
         cells_missed = 0
-        
-        for key, value in self.msi_coordinates.items():
-            x_msi, y_msi = value
-            x_global, y_global = x_msi * self.ms_spacing + 0.25 * len(self.mic_canvas[0]) * self.mic_spacing, y_msi * self.ms_spacing + 0.25 * len(self.mic_canvas) * self.mic_spacing
-            x_pertubated, y_pertubated = self.final_transform.TransformPoint((x_global, y_global))
-            x = x_pertubated / self.ms_spacing
-            y = y_pertubated / self.ms_spacing
-            mask_id = 0
-            subregion = np.zeros(masks.shape, dtype=np.int64)
-            subregion[mask_cut==key] = masks[mask_cut==key].astype(np.int64)
-            counts = np.bincount(subregion[subregion!=0].flatten())
-            if len(counts) >= 1:
-                mask_id = int(np.argmax(counts))
-                if mask_id in deleted_labels:
-                    continue
-                canvas_to_mask[key] = mask_id
-                true_int = self.cell_intensities[key]
-                meas_int = cells[mask_id][0]
-                spectra_comparison.append((true_int-meas_int)/true_int)
-                #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
-            else:
+        spectra_metrics_all_mz_mean = []
+        spectra_metrics_all_mz_var = []
+        cells_missed_all_mz = []
+        for i in range(len(self.mass_list)):
+            spectra_comparison = []
+            for key, value in self.msi_coordinates.items():
+                x_msi, y_msi = value
+                x_global, y_global = x_msi * self.ms_spacing + 0.25 * len(self.mic_canvas[0]) * self.mic_spacing, y_msi * self.ms_spacing + 0.25 * len(self.mic_canvas) * self.mic_spacing
+                x_pertubated, y_pertubated = self.final_transform.TransformPoint((x_global, y_global))
+                x = x_pertubated / self.ms_spacing
+                y = y_pertubated / self.ms_spacing
                 mask_id = 0
-                canvas_to_mask[key] = mask_id
-                true_int = self.cell_intensities[key]
-                meas_int = 0
-                cells_missed += 1
-                spectra_comparison.append((true_int-meas_int)/true_int)
-                #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                subregion = np.zeros(masks.shape, dtype=np.int64)
+                subregion[mask_cut==key] = masks[mask_cut==key].astype(np.int64)
+                counts = np.bincount(subregion[subregion!=0].flatten())
+                if len(counts) >= 1:
+                    mask_id = int(np.argmax(counts))
+                    if mask_id in deleted_labels:
+                        continue
+                    canvas_to_mask[key] = mask_id
+                    print(f"at mz {mass_list[i]} cell {key} assigned to mask {mask_id}, true intensity: {self.cell_intensities[key][i]}, measured intensity: {cells[mask_id][i]}")
+                    true_int = self.cell_intensities[key][i]
+                    meas_int = cells[mask_id][i]
+                    if true_int != 0:
+                        spectra_comparison.append((true_int-meas_int)/true_int)
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                else:
+                    mask_id = 0
+                    canvas_to_mask[key] = mask_id
+                    true_int = self.cell_intensities[key][i]
+                    meas_int = 0
+                    cells_missed += 1
+                    if true_int != 0:
+                        spectra_comparison.append((true_int-meas_int)/true_int)
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                
             
-        
-        spectra_comparison = np.array(spectra_comparison) * 100
-        spectra_comparison = spectra_comparison[~np.isnan(spectra_comparison) & ~np.isinf(spectra_comparison)]
-        if self.plot or self.save_img:
-            plt.figure()
-            plt.hist(spectra_comparison, bins=100)
-            if self.save_img:
-                plt.savefig(self.output + "/spectra_hist.svg", bbox_inches='tight', pad_inches=0)
-        self.spectra_metrics["spectra_mean_precision"] = np.mean(spectra_comparison[spectra_comparison!=100])
-        self.spectra_metrics["missed_cells"] = np.sum(spectra_comparison==100)
+            spectra_comparison = np.array(spectra_comparison) * 100
+            spectra_comparison = spectra_comparison[~np.isnan(spectra_comparison) & ~np.isinf(spectra_comparison)]
+            if self.plot or self.save_img:
+                plt.figure()
+                plt.hist(spectra_comparison, bins=100)
+                plt.title(f"m/z {self.mass_list[i]}")
+                if self.save_img:
+                    plt.savefig(self.output + f"/spectra_hist_{self.mass_list[i]}.svg", bbox_inches='tight', pad_inches=0, dpi=600)
+            spectra_metrics_all_mz_mean.append(np.mean(spectra_comparison[spectra_comparison!=100]))
+            spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
+            cells_missed_all_mz.append(np.sum(spectra_comparison==100))
+        self.spectra_metrics["spectra_mean_deviation"] = spectra_metrics_all_mz_mean
+        self.spectra_metrics["spectra_deviation_variance"] = spectra_metrics_all_mz_var
+        self.spectra_metrics["missed_cells"] = cells_missed_all_mz
 
         #print(f"Cells missed: {cells_missed}, Mean relative difference: {np.mean(spectra_comparison):.2%}")
         #print(f"FISCAS took {stop-start} s to run")
@@ -1052,24 +1071,71 @@ class Validator:
             plt.show()
         stop = time.perf_counter()
         self.spectra_metrics['time'] = stop-start
+        import pickle 
 
+        with open('saved_dictionary.pkl', 'wb') as f:
+            pickle.dump(self.spectra_metrics, f)
+        
         return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics
 
-A = Validator(
+
+class CellType:
+    def __init__(self, name, parameters, population):
+        self.name = name
+        self.parameters = parameters
+        self.population = population     
+        return None
+    def get_distribution(self, mz):
+        return self.parameters[mz][0]
+    def get_location(self, mz):
+        return self.parameters[mz][1]
+    def get_scale(self, mz):
+        return self.parameters[mz][2]
+    def get_intensity(self, mz):
+        if self.parameters[mz][0] == "normal":
+            intensity = np.abs(np.random.normal(loc=self.parameters[mz][1], scale=self.parameters[mz][2]))
+        elif self.parameters[mz][0] == "uniform":
+            low = self.parameters[mz][1] - self.parameters[mz][2]
+            high = self.parameters[mz][1] + self.parameters[mz][2]
+            intensity = np.abs(np.random.uniform(low=low, high=high))
+        return intensity
+
+mass_list = [0,1,2,3]
+seed = 4502
+random.seed(seed)
+np.random.seed(seed)
+parameters_A = {mass_list[0] : ["normal", 10, 5], 
+                mass_list[1] : ["uniform", 20, 0],
+                mass_list[2] : ["uniform", 100, 0],
+                mass_list[3] : ["uniform", 0, 0]
+                }
+parameters_B = {mass_list[0] : ["uniform", 0, 0], 
+                mass_list[1] : ["uniform", 0, 0],
+                mass_list[2] : ["normal", 10, 5],
+                mass_list[3] : ["uniform", 20, 0]
+                }
+
+A = CellType("A", parameters_A, 0.5)
+#B = CellType("B", parameters_B, 0.5)
+
+valid = Validator(
     use_perfect_segmentation=True, 
     use_perfect_registration=True, 
     allow_multiplets=True,
-    seed=4502, 
+    seed=seed, 
     scale=1, 
     teaching_imprecision=10, 
     rotation=10, 
-    ms_spacing=5, 
+    ms_spacing=20, 
     plot=True, 
-    save_img=False, 
-    canvas_size=1000, 
-    cell_density=0.1, 
-    diffusion=0)
+    save_img=True, 
+    canvas_size=500, 
+    cell_density=0.3, 
+    diffusion=0,
+    mass_list=mass_list,
+    cell_types = [A],
+    render_animation=True)#,
     #texture='registration',
     #texture_path="./textures/noise_150x150.jpg",
     #texture_epsilon=1)
-A.main()
+valid.main()

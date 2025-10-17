@@ -8,6 +8,31 @@
 ---
 # Registration Report
 ```{python}
+#| output: False
+from FISCAS_Validator import Validator, CellType
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+import random
+from IPython.display import HTML, display, SVG
+
+mass_list = [0,1,2,3]
+seed = 4502
+random.seed(seed)
+np.random.seed(seed)
+parameters_A = {mass_list[0] : ["normal", 10, 1], 
+                mass_list[1] : ["uniform", 20, 0],
+                mass_list[2] : ["uniform", 100, 0],
+                mass_list[3] : ["uniform", 0, 0]
+                }
+parameters_B = {mass_list[0] : ["normal", 10, 1], 
+                mass_list[1] : ["uniform", 20, 0],
+                mass_list[2] : ["uniform", 100, 0],
+                mass_list[3] : ["uniform", 0, 0]
+                }
+
+A = CellType("A", parameters_A, 0.5)
+B = CellType("B", parameters_B, 0.5)
 #| tags: [parameters]
 
 
@@ -24,7 +49,7 @@ cell_density=0.3
 max_cell_placement_iterations=1000
 rotation=10
 scale=1.00
-mass_list=[577.5, 760.68]
+mass_list=[0, 1, 2, 3]
 diffusion=5
 noise_loc=0.0
 noise_scale=0.0
@@ -36,6 +61,7 @@ cell_diameter=120
 texture=None
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon=0.1
+cell_types=[A]
 
 def convert_to_float_and_round(value, decimal=4):
     if isinstance(value, (list, tuple)):
@@ -48,11 +74,6 @@ def convert_to_float_and_round(value, decimal=4):
 
 ```{python}
 #| output: False
-from FISCAS_Validator import Validator
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from IPython.display import HTML, display, SVG
 
 A = Validator(path_sample_cells=path_sample_cells,
 output=output,
@@ -77,8 +98,11 @@ save_img=save_img,
 remove_ambiguous=remove_ambiguous,
 cell_diameter=cell_diameter,
 texture=texture,
-texture_path=texture_path)
+texture_path=texture_path,
+cell_types=cell_types)
 canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics = A.main()
+mass_list = A.mass_list
+filename = f"./output/spectra_hist_{mass_list[0]}.svg"
 ```
 
 ## Settings
@@ -133,14 +157,18 @@ display(HTML(html_table))
 :::
 ## Spectra Compilation
 
-::: {layout="[[0.9,-0.1,0.9]]"}
+::: {layout="[[1],[1]]"}
 
-![Spectra Compilation Histogram](./output/spectra_hist.svg){#fig-spectra_hist}
+![Spectra Compilation Histogram](`{python} filename`){#fig-spectra_hist}
 
 ```{python}
 df = pd.DataFrame(list(spectra_metrics.items()), columns=['Key', 'Value'])
-df['Value'] = df['Value'].apply(convert_to_float_and_round, decimal=3)
-html_table = df.to_html(index=False)
+df2 = pd.DataFrame(df.loc[df['Key']!="time", 'Value'].to_list(), columns=[mz for mz in mass_list])
+df2 = df2.fillna(0)
+df2.insert(0, 'Metric', df.loc[df['Key']!="time", 'Key'].to_list())
+for mz in mass_list:
+    df2[mz] = df2[mz].apply(convert_to_float_and_round, decimal=2)
+html_table = df2.to_html(index=False)
 display(HTML(html_table))
 ```
 
