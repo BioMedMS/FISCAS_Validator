@@ -61,7 +61,7 @@ cell_diameter=120
 texture=None
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon=0.1
-cell_types=[A]
+cell_types=[A, B]
 
 def convert_to_float_and_round(value, decimal=4):
     if isinstance(value, (list, tuple)):
@@ -110,6 +110,16 @@ filename = f"./output/spectra_hist_{mass_list[0]}.svg"
 settings = A.return_settings()
 html_table = pd.DataFrame(list(settings.items()), columns=['Key', 'Value']).to_html(index=False)
 display(HTML(html_table))
+
+cell_types = A.cell_types
+for cell_type in cell_types:
+    name = cell_type.name
+    population = cell_type.population
+    parameters = cell_type.parameters
+    cell_type_table = pd.DataFrame(parameters.values(), columns=["distribution", "location", "scale"])
+    cell_type_table.insert(0, "m/z", A.mass_list)
+    print(f"Cell Type {name} makes up {population*100}% of the total cell population")
+    display(HTML(cell_type_table.to_html(index=False)))
 ```
 
 ## Generated Canvas
@@ -171,5 +181,4 @@ for mz in mass_list:
 html_table = df2.to_html(index=False)
 display(HTML(html_table))
 ```
-
 :::

@@ -19,6 +19,6 @@ def images_to_video(image_folder, output_video, fps=30):
     writer.close()
 
 # Example usage
-image_folder = "D:/Jan/fiscas-validationKit/output/animation"
+image_folder = "D:/Jan/fiscas-validationKit/output/animation/new_version_5um"
 output_video = "output_video.mp4"
 images_to_video(image_folder, output_video, fps=5)

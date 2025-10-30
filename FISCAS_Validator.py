@@ -16,6 +16,7 @@ import copy
 import time
 from scipy.optimize import linear_sum_assignment
 from matplotlib.colors import LinearSegmentedColormap
+import pickle 
 
 # Settings
 #path_sample_cells = "D:/Jan/fiscas-validationKit/Cell_images/microscopy/"
@@ -106,11 +107,15 @@ class Validator:
         self.texture = texture
         self.texture_path = texture_path
         self.texture_epsilon = texture_epsilon
+        plt.rcParams.update({'figure.max_open_warning': 0})
         return None
 
     def return_settings(self):
+        cell_types = []
+        for i in self.cell_types:
+            cell_types.append(i.name)
         settings = {
-            "cell_types": self.cell_types,
+            "cell_types": cell_types,
             "path_sample_cells": self.path_sample_cells,
             "output": self.output,
             "allow_multiplets": self.allow_multiplets,
@@ -138,6 +143,8 @@ class Validator:
             "texture_epsilon": self.texture_epsilon,
         }
         return settings
+
+
 
 
     # loads random cell images and their corresponding masks from folder with prepared cell images and applies random rotation and scale
@@ -639,7 +646,7 @@ class Validator:
                             cell_mask[mask_region == cell_id] = cell_id
                             msi_cell, cell_intensities = self.generate_maldi_cell(
                                 cell_mask, sigma=70, diffusion=self.diffusion)
-                            print(f"Cell ID {cell_id} with intensities {cell_intensities}")
+                            #print(f"Cell ID {cell_id} with intensities {cell_intensities}")
                             p_top_left_ms = (p_top_left_ms[0], p_top_left_ms[1])
                             p_bottom_right_ms = (p_top_left_ms[0]+len(msi_cell[0]), p_top_left_ms[1]+len(msi_cell))
                             if (p_top_left_ms[0] >= 0) & (p_top_left_ms[1] >= 0) & (p_bottom_right_ms[0] < len(self.ms_canvas[0])) & (p_bottom_right_ms[1] < len(self.ms_canvas)):
@@ -983,6 +990,9 @@ class Validator:
                     cells[cell_id,:] += self.maldi_canvas[i,j,:]
                     cell_areas[cell_id] += 1
                 if self.render_animation == True:
+                    if i == 0 and j == 0:
+                        import matplotlib as mpl
+                        mpl.use('Agg')
                     fig, ax = plt.subplots(1,2)
                     ax[0].imshow(masks_cleared)
                     ax[1].imshow(self.maldi_canvas[:,:,0], cmap='inferno', vmax=np.percentile(self.maldi_canvas[:,:,0], 99.))
@@ -1006,7 +1016,7 @@ class Validator:
                         except Exception as e:
                             continue
                     plt.savefig(f"D:/Jan/fiscas-validationKit/output/animation/img_{k}.jpg", dpi=300)
-                    plt.close(fig)
+                    plt.close()
                 k += 1
 
         canvas_to_mask = {}
@@ -1031,9 +1041,10 @@ class Validator:
                     if mask_id in deleted_labels:
                         continue
                     canvas_to_mask[key] = mask_id
-                    print(f"at mz {mass_list[i]} cell {key} assigned to mask {mask_id}, true intensity: {self.cell_intensities[key][i]}, measured intensity: {cells[mask_id][i]}")
+                    #print(f"at mz {mass_list[i]} cell {key} assigned to mask {mask_id}, true intensity: {self.cell_intensities[key][i]}, measured intensity: {cells[mask_id][i]}")
                     true_int = self.cell_intensities[key][i]
                     meas_int = cells[mask_id][i]
+                    
                     if true_int != 0:
                         spectra_comparison.append((true_int-meas_int)/true_int)
                     #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
@@ -1056,7 +1067,7 @@ class Validator:
                 plt.title(f"m/z {self.mass_list[i]}")
                 if self.save_img:
                     plt.savefig(self.output + f"/spectra_hist_{self.mass_list[i]}.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-            spectra_metrics_all_mz_mean.append(np.mean(spectra_comparison[spectra_comparison!=100]))
+            spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison[spectra_comparison!=100])))
             spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
             cells_missed_all_mz.append(np.sum(spectra_comparison==100))
         self.spectra_metrics["spectra_mean_deviation"] = spectra_metrics_all_mz_mean
@@ -1071,10 +1082,14 @@ class Validator:
             plt.show()
         stop = time.perf_counter()
         self.spectra_metrics['time'] = stop-start
-        import pickle 
+        
 
-        with open('saved_dictionary.pkl', 'wb') as f:
-            pickle.dump(self.spectra_metrics, f)
+        with open('canvas_to_mask.pkl', 'wb') as f:
+            pickle.dump(canvas_to_mask, f)
+        with open('cell_intensities.pkl', 'wb') as f:
+            pickle.dump(self.cell_intensities, f)
+        with open('cells.pkl', 'wb') as f:
+            pickle.dump(cells, f)
         
         return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics
 
@@ -1106,7 +1121,7 @@ random.seed(seed)
 np.random.seed(seed)
 parameters_A = {mass_list[0] : ["normal", 10, 5], 
                 mass_list[1] : ["uniform", 20, 0],
-                mass_list[2] : ["uniform", 100, 0],
+                mass_list[2] : ["uniform", 0, 0],
                 mass_list[3] : ["uniform", 0, 0]
                 }
 parameters_B = {mass_list[0] : ["uniform", 0, 0], 
@@ -1116,7 +1131,7 @@ parameters_B = {mass_list[0] : ["uniform", 0, 0],
                 }
 
 A = CellType("A", parameters_A, 0.5)
-#B = CellType("B", parameters_B, 0.5)
+B = CellType("B", parameters_B, 0.5)
 
 valid = Validator(
     use_perfect_segmentation=True, 
@@ -1126,15 +1141,15 @@ valid = Validator(
     scale=1, 
     teaching_imprecision=10, 
     rotation=10, 
-    ms_spacing=20, 
+    ms_spacing=5, 
     plot=True, 
     save_img=True, 
-    canvas_size=500, 
+    canvas_size=1500, 
     cell_density=0.3, 
     diffusion=0,
     mass_list=mass_list,
-    cell_types = [A],
-    render_animation=True)#,
+    cell_types = [A,B],
+    render_animation=False)#,
     #texture='registration',
     #texture_path="./textures/noise_150x150.jpg",
     #texture_epsilon=1)
