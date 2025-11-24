@@ -16,26 +16,17 @@ import pandas as pd
 import random
 from IPython.display import HTML, display, SVG
 
-mass_list = [0,1,2,3]
-seed = 4502
-random.seed(seed)
-np.random.seed(seed)
-parameters_A = {mass_list[0] : ["normal", 10, 1], 
-                mass_list[1] : ["uniform", 20, 0],
-                mass_list[2] : ["uniform", 100, 0],
-                mass_list[3] : ["uniform", 0, 0]
-                }
-parameters_B = {mass_list[0] : ["normal", 10, 1], 
-                mass_list[1] : ["uniform", 20, 0],
-                mass_list[2] : ["uniform", 100, 0],
-                mass_list[3] : ["uniform", 0, 0]
-                }
+def convert_to_float_and_round(value, decimal=4):
+    if isinstance(value, (list, tuple)):
+        return [convert_to_float_and_round(item) for item in value]
+    elif isinstance(value, np.ndarray):
+        return np.array([convert_to_float_and_round(item) for item in value])
+    else:
+        return round(float(value), decimal)
+```
 
-A = CellType("A", parameters_A, 0.5)
-B = CellType("B", parameters_B, 0.5)
+```{python}
 #| tags: [parameters]
-
-
 path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy/HuTu80/"
 output="D:/Jan/fiscas-validationKit/output/"
 allow_multiplets=True
@@ -61,19 +52,29 @@ cell_diameter=120
 texture=None
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon=0.1
-cell_types=[A, B]
-
-def convert_to_float_and_round(value, decimal=4):
-    if isinstance(value, (list, tuple)):
-        return [convert_to_float_and_round(item) for item in value]
-    elif isinstance(value, np.ndarray):
-        return np.array([convert_to_float_and_round(item) for item in value])
-    else:
-        return round(float(value), decimal)
 ```
 
 ```{python}
 #| output: False
+if seed == 0:
+    seed = random.randint(1, 10000)
+random.seed(seed)
+np.random.seed(seed)
+parameters_A = {mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 25, 5],
+                mass_list[2] : ["normal", 15, 5],
+                mass_list[3] : ["uniform", 0, 0]
+                }
+parameters_B = {mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["uniform", 0, 0],
+                mass_list[2] : ["normal", 25, 5],
+                mass_list[3] : ["normal", 25, 1]
+                }
+
+A = CellType("A", parameters_A, 0.5)
+B = CellType("B", parameters_B, 0.5)
+
+cell_types=[A,B]
 
 A = Validator(path_sample_cells=path_sample_cells,
 output=output,
@@ -124,7 +125,7 @@ for cell_type in cell_types:
 
 ## Generated Canvas
 
-::: {layout="[[0.9,-0.1,0.9], [0.9,-0.1,0.9]]"}
+::: {layout="[[45,-10,45], [45,-10,45]]"}
 
 ![Microscopy Canvas](./output/mic_canvas.svg){#fig-mic_canvas}
 
@@ -137,7 +138,7 @@ for cell_type in cell_types:
 :::
 ## Registration
 
-::: {layout="[[0.9,-0.1,0.9]]"}
+::: {layout="[[45,-10,45]]"}
 
 ![Registration Error](./output/Registration_error_plot.svg){#fig-registartion_error_plot}
 
@@ -153,7 +154,7 @@ display(HTML(html_table))
 ```
 ## Segmentation
 
-::: {layout="[[0.9,-0.1,0.9]]"}
+::: {layout="[[45,-10,45]]"}
 
 ![Segmentation](./output/segmentation_results.svg){#fig-mic_canvas}
 
@@ -167,18 +168,21 @@ display(HTML(html_table))
 :::
 ## Spectra Compilation
 
-::: {layout="[[1],[1]]"}
+::: {layout="[[45,-10,45],[100]]"}
 
 ![Spectra Compilation Histogram](`{python} filename`){#fig-spectra_hist}
 
+![FPR Histogram](./output/fpr_hist.svg){#fig-fpr_hist}
+
 ```{python}
 df = pd.DataFrame(list(spectra_metrics.items()), columns=['Key', 'Value'])
-df2 = pd.DataFrame(df.loc[df['Key']!="time", 'Value'].to_list(), columns=[mz for mz in mass_list])
+df2 = pd.DataFrame(df.loc[~df['Key'].isin(["time", "FPR"]), 'Value'].to_list(), columns=[mz for mz in mass_list])
 df2 = df2.fillna(0)
-df2.insert(0, 'Metric', df.loc[df['Key']!="time", 'Key'].to_list())
+df2.insert(0, 'Metric', df.loc[~df['Key'].isin(["time", "FPR"]), 'Key'].to_list())
 for mz in mass_list:
     df2[mz] = df2[mz].apply(convert_to_float_and_round, decimal=2)
 html_table = df2.to_html(index=False)
 display(HTML(html_table))
+print(f"mean FPR is {spectra_metrics['FPR']:.2f}% \nSpectra compilation took {spectra_metrics['time']} s")
 ```
 :::
