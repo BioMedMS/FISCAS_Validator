@@ -178,37 +178,18 @@ class Validator:
 
     # in the current version the sum_pooling is done before the cell is placed; would likely be better to do this after placement of all cells on the canvas
     def sum_pooling(self, image, scale_factor):
-            # Calculate the padding needed to make the dimensions divisible by the scale factor
-            height, width = image.shape
-            pad_height = (scale_factor - height % scale_factor) % scale_factor
-            pad_width = (scale_factor - width % scale_factor) % scale_factor
-
-            # Apply zero padding to the image, centering it
-            padded_image = np.pad(
-                image,
-                (
-                    (pad_height // 2, pad_height - pad_height // 2),
-                    (pad_width // 2, pad_width - pad_width // 2)
-                ),
-                mode='constant',
-                constant_values=0
-            )
-
-            # Reshape the padded image to group the pixels into blocks
-            new_height = padded_image.shape[0] // scale_factor
-            new_width = padded_image.shape[1] // scale_factor
-            reshaped = padded_image.reshape(new_height, scale_factor, new_width, scale_factor)
-
-            # Perform sum pooling
-            pooled_image = reshaped.sum(axis=(1, 3))
-            return pooled_image
+        new_height = len(self.ms_canvas) * int(scale_factor) 
+        new_width =len(self.ms_canvas[0]) * int(scale_factor)
+        new_img = np.zeros((new_height, new_width))
+        new_img[:,:] = image[:new_height, :new_width]
+        # Perform sum pooling
+        pooled_image = skimage.measure.block_reduce(new_img, block_size=(int(scale_factor), int(scale_factor)), func=np.sum)
+        return pooled_image
 
 
     # generate MALDI signal distribution for a given cell mask
-    def generate_maldi_cell(self, mask, sigma=4.0, diffusion=0):
+    def generate_maldi_cell(self, mask, sigma=4.0):
         mask = copy.deepcopy(mask)
-        if self.diffusion != 0:
-            mask = self.diffuse_mask(mask, diffusion)
         coords = np.argwhere(mask > 0)
         center_of_mass = coords.mean(axis=0)
         cx, cy = center_of_mass
@@ -228,11 +209,7 @@ class Validator:
             else:
                 rescaled_intensities = intensities * factor
             intensities_all_mz[:,:, i] = rescaled_intensities
-            pooled_intensities = self.sum_pooling(rescaled_intensities, int(self.ms_spacing/self.mic_spacing))
-            if i == 0:
-                pooled_intensities_all_mz = np.zeros((len(pooled_intensities), len(pooled_intensities[0]), len(self.mass_list)))
-            pooled_intensities_all_mz[:,:, i] = pooled_intensities
-        return pooled_intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
+        return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
 
     # calculate the density of cells on the mask canvas
@@ -510,10 +487,17 @@ class Validator:
             (int(self.canvas_size / self.mic_spacing), int(self.canvas_size / self.mic_spacing), 3))
         self.mask_canvas = np.zeros(
             (int(self.canvas_size / self.mic_spacing), int(self.canvas_size / self.mic_spacing)))
-        self.ms_mask_canvas = np.zeros((int(0.5*self.canvas_size / self.ms_spacing), int(
-            0.5*self.canvas_size / self.ms_spacing)))
-        self.ms_canvas = np.zeros((int(0.5*self.canvas_size / self.ms_spacing), int(
-            0.5*self.canvas_size / self.ms_spacing), len(self.mass_list)))
+        self.cell_canvas = np.zeros(
+            (int(0.5*self.canvas_size / self.mic_spacing), int(0.5*self.canvas_size / self.mic_spacing), len(self.mass_list)))
+        self.ms_canvas = np.zeros((round(len(self.mic_canvas)*0.5*self.mic_spacing/self.ms_spacing), round(len(self.mic_canvas)*0.5*self.mic_spacing/self.ms_spacing), len(self.mass_list)))
+        msi_tl = (int(0.25*len(self.mic_canvas[0])), int(0.25*len(self.mic_canvas)))
+        msi_br = (int(0.25*len(self.mic_canvas[0])) + len(self.ms_canvas)*self.ms_spacing/self.mic_spacing, int(0.25*len(self.mic_canvas)) + len(self.ms_canvas[0])*self.ms_spacing/self.mic_spacing)
+        print(self.mic_canvas.shape)
+        print(self.cell_canvas.shape)
+        print(self.ms_canvas.shape)
+        print(msi_tl)
+        print(msi_br)
+        print(self.ms_spacing / self.mic_spacing)
 
         # get list of available cell images and their corresponding masks
         all_images = glob.glob(os.path.join(
@@ -541,10 +525,6 @@ class Validator:
             # prevent cell images to violate canvas border
             p_top_left = (int(p[0] - cell.shape[1] // 2), int(p[1] - cell.shape[0] // 2))
             p_bottom_right = (int(p[0] + cell.shape[1] // 2), int(p[1] + cell.shape[0] // 2))
-            if self.diffusion != 0: # add padding to prevent diffusion outside of cell image borders
-                padding = int(self.diffusion / self.mic_spacing)
-                p_top_left = (p_top_left[0]-padding, p_top_left[1]-padding)
-                p_bottom_right = (p_bottom_right[0]+padding, p_bottom_right[1]+padding)
             if (p_top_left[0] > 0) & (p_top_left[1] > 0) & (p_bottom_right[0] < len(self.mic_canvas[0])) & (p_bottom_right[1] < len(self.mic_canvas)):
                 canvas_area = self.mask_canvas[p_top_left[1]:p_top_left[1]+len(
                     mask), p_top_left[0]:p_top_left[0]+len(mask[0])]
@@ -564,47 +544,43 @@ class Validator:
                     # add msi data
                     if (p_top_left[0] > 0.26 * len(self.mic_canvas[0])) & (p_top_left[0] < 0.74 * len(self.mic_canvas[0])) & (p_top_left[1] > 0.26 * len(self.mic_canvas)) & (p_top_left[1] < 0.74 * len(self.mic_canvas)):
                         # conversion to global ms coordinate system
-                        offset_x = round(len(self.mic_canvas[0])*0.25*self.mic_spacing/self.ms_spacing)
-                        offset_y = round(len(self.mic_canvas)*0.25*self.mic_spacing/self.ms_spacing)
-                        p_top_left_ms = np.array((
-                            round((p_top_left[0])/(self.ms_spacing/self.mic_spacing)) - offset_x,
-                            round((p_top_left[1])/(self.ms_spacing/self.mic_spacing)) - offset_y
+                        offset_x_mic = int(len(self.mic_canvas[0])*0.25)
+                        offset_y_mic = int(len(self.mic_canvas)*0.25)
+                        offset_x = int(len(self.mic_canvas[0])*0.25*self.mic_spacing/self.ms_spacing)
+                        offset_y = int(len(self.mic_canvas)*0.25*self.mic_spacing/self.ms_spacing)
+                        p_top_left_cell = np.array((
+                            p_top_left[0] - offset_x_mic,
+                            p_top_left[1] - offset_y_mic
                             ), dtype=np.uint16)
-                        p_top_left_mic = np.array((
-                            (p_top_left_ms[0] - 0.5 + offset_x) * self.ms_spacing/self.mic_spacing,
-                            (p_top_left_ms[1] - 0.5 + offset_y) * self.ms_spacing/self.mic_spacing
-                            ), dtype=np.uint16)
-                        p_bottom_right_ms = np.array((
-                            round((p_bottom_right[0])/(self.ms_spacing/self.mic_spacing)) - offset_x,
-                            round((p_bottom_right[1])/(self.ms_spacing/self.mic_spacing)) - offset_y
-                            ), dtype=np.uint16)
-                        p_bottom_right_mic = np.array((
-                            (p_bottom_right_ms[0] + 0.5 + offset_x) * self.ms_spacing/self.mic_spacing,
-                            (p_bottom_right_ms[1] + 0.5 + offset_y) * self.ms_spacing/self.mic_spacing
+                        p_bottom_right_cell = np.array((
+                            p_bottom_right[0] - offset_x_mic,
+                            p_bottom_right[1] - offset_y_mic
                             ), dtype=np.uint16)
                         p_ms = np.array((round((p[0])/(self.ms_spacing/self.mic_spacing)) - offset_x ,
                                 round((p[1])/(self.ms_spacing/self.mic_spacing)) - offset_y), dtype=np.uint16)
 
                         for cell_id in range(current_id, current_mask_index+1):
-                            cell_mask = np.zeros((int(p_bottom_right_mic[1]-p_top_left_mic[1]), int(p_bottom_right_mic[0]-p_top_left_mic[0])))
-                            mask_region = self.mask_canvas[p_top_left_mic[1]:p_bottom_right_mic[1], p_top_left_mic[0]:p_bottom_right_mic[0]]
+                            cell_mask = np.zeros((len(mask),len(mask[0])))
+                            mask_region = self.mask_canvas[p_top_left[1]:p_top_left[1] +
+                                        len(mask), p_top_left[0]:p_top_left[0]+len(mask[0])]
                             cell_mask[mask_region == cell_id] = cell_id
                             msi_cell, cell_intensities = self.generate_maldi_cell(
-                                cell_mask, sigma=70, diffusion=self.diffusion)
+                                cell_mask, sigma=20)
                             #print(f"Cell ID {cell_id} with intensities {cell_intensities}")
-                            p_top_left_ms = (p_top_left_ms[0], p_top_left_ms[1])
-                            p_bottom_right_ms = (p_top_left_ms[0]+len(msi_cell[0]), p_top_left_ms[1]+len(msi_cell))
-                            if (p_top_left_ms[0] >= 0) & (p_top_left_ms[1] >= 0) & (p_bottom_right_ms[0] < len(self.ms_canvas[0])) & (p_bottom_right_ms[1] < len(self.ms_canvas)):
+                            if (p_top_left_cell[0] >= 0) & (p_top_left_cell[1] >= 0) & (p_bottom_right_cell[0] < len(self.cell_canvas[0])) & (p_bottom_right_cell[1] < len(self.cell_canvas)):
                                 for j in range(len(self.mass_list)):
                                     # add cell intensity to ms canvas; += to add intensities of overlapping diffusion
-                                    self.ms_canvas[p_top_left_ms[1]-1:p_top_left_ms[1]-1+len(
-                                        msi_cell), p_top_left_ms[0]-1:p_top_left_ms[0]-1+len(msi_cell[0]), j] += msi_cell[:,:,j]
+                                    self.cell_canvas[p_top_left_cell[1]-1:p_top_left_cell[1]-1+len(msi_cell), 
+                                        p_top_left_cell[0]-1:p_top_left_cell[0]-1+len(msi_cell[0]), j] += msi_cell[:,:,j]
                                 # store local ms coordinates
                                 self.msi_coordinates[cell_id] = (int(p_ms[0]), int(p_ms[1]))
                                 self.msi_canvas_coordinates[cell_id] = (int(p_ms[0] + offset_x), int(p_ms[1] + offset_y))  # store global ms_coordinates
                                 # store total msi cell intensity
                                 self.cell_intensities[cell_id] = cell_intensities
             current_id = current_mask_index + 1
+
+        for i in range(len(self.mass_list)):
+            self.ms_canvas[:,:,i] = self.sum_pooling(self.cell_canvas[:,:,i], int(self.ms_spacing / self.mic_spacing))
 
 
         if self.plot or self.save_img:
@@ -618,6 +594,12 @@ class Validator:
             my_cmap = plt.cm.prism.copy()
             my_cmap.set_bad(color='black')  # Set the color for masked values
             plt.imshow(masked_canvas, cmap=my_cmap)
+            plt.axis('off')
+            f_cell_canvas = plt.figure()
+            #plt.title("MSI Canvas")
+            print(np.max(self.cell_canvas[:,:,0]))
+            print(np.percentile(self.cell_canvas[:,:,0], 99.))
+            plt.imshow(self.cell_canvas[:,:,0], vmax=np.percentile(self.cell_canvas[:,:,0], 99.), cmap='inferno')
             plt.axis('off')
             f_msi_canvas = plt.figure()
             #plt.title("MSI Canvas")
@@ -634,6 +616,7 @@ class Validator:
             if self.save_img:
                 f_mic_canvas.savefig(self.output + "/mic_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
                 f_mask_canvas.savefig(self.output + "/mask_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
+                f_cell_canvas.savefig(self.output + "/cell_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
                 f_msi_canvas.savefig(self.output + "/ms_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         self.canvas_metrics["n_cells"] = len(self.mic_coordinates)
         self.canvas_metrics["n_msi_cells"] = len(self.cell_intensities)
@@ -702,15 +685,16 @@ class Validator:
         moving_size = (maldi_sitk.GetSize()[0] * scaling_factor, maldi_sitk.GetSize()[1] * scaling_factor)
         moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkNearestNeighbor, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
 
-        mic_landmarks = [[0.25 * len(self.mic_canvas[0])*self.mic_spacing, 0.25 * len(self.mic_canvas)*self.mic_spacing],
-                          [0.25 * len(self.mic_canvas[0])*self.mic_spacing, 0.75 * len(self.mic_canvas)*self.mic_spacing],
-                          [0.75 * len(self.mic_canvas[0])*self.mic_spacing, 0.25 * len(self.mic_canvas)*self.mic_spacing],
-                          [0.75 * len(self.mic_canvas[0])*self.mic_spacing, 0.75 * len(self.mic_canvas)*self.mic_spacing]]
+        mic_landmarks = [[msi_tl[0]*self.mic_spacing, msi_tl[1]*self.mic_spacing],
+                          [msi_tl[0]*self.mic_spacing, msi_br[1]*self.mic_spacing],
+                          [msi_br[0]*self.mic_spacing, msi_tl[1]*self.mic_spacing],
+                          [msi_br[0]*self.mic_spacing, msi_br[1]*self.mic_spacing]]
         moving_landmarks = [[0.0, 0.0],
                              [0.0, len(self.ms_canvas)*self.ms_spacing],
                              [len(self.ms_canvas[0])*self.ms_spacing, 0.0],
                              [len(self.ms_canvas[0])*self.ms_spacing, len(self.ms_canvas)*self.ms_spacing]]
         center = np.array(self.ms_canvas.shape[:2], dtype=float)/2
+
         center = center * self.ms_spacing
         moving_pertubated_landmarks = self.pertubate_coordinates(moving_landmarks, center=center, inverse=True)
   
@@ -948,7 +932,7 @@ class Validator:
             spectra_comparison = []
             for key, value in self.msi_coordinates.items():
                 x_msi, y_msi = value
-                x_global, y_global = x_msi * self.ms_spacing + 0.25 * len(self.mic_canvas[0]) * self.mic_spacing, y_msi * self.ms_spacing + 0.25 * len(self.mic_canvas) * self.mic_spacing
+                x_global, y_global = x_msi * self.ms_spacing + msi_tl[0] * self.mic_spacing, y_msi * self.ms_spacing + msi_tl[1] * self.mic_spacing
                 x_pertubated, y_pertubated = self.final_transform.TransformPoint((x_global, y_global))
                 x = x_pertubated / self.ms_spacing
                 y = y_pertubated / self.ms_spacing
@@ -1082,7 +1066,7 @@ B = CellType("B", parameters_B, 0.5)
 
 valid = Validator(
     use_perfect_segmentation=True, 
-    use_perfect_registration=True, 
+    use_perfect_registration=False, 
     allow_multiplets=True,
     remove_ambiguous=False,
     seed=1, 
