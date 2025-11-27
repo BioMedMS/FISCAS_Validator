@@ -175,11 +175,6 @@ class Validator:
         return dil_sample
 
 
-    # in the current version the sum_pooling is done before the cell is placed; would likely be better to do this after placement of all cells on the canvas
-    def sum_pooling(self, image, scale_factor):
-        pooled_image = skimage.measure.block_reduce(image, block_size=(scale_factor, scale_factor), func=np.sum)
-        return pooled_image
-
 
     # generate MALDI signal distribution for a given cell mask
     def generate_maldi_cell(self, mask, sigma=4.0):
@@ -490,13 +485,6 @@ class Validator:
         self.ms_canvas = np.zeros((int(len(self.mic_canvas)*0.5*mic_to_ms), int(len(self.mic_canvas)*0.5*mic_to_ms), len(self.mass_list)))
         msi_tl = (int(0.25*len(self.mic_canvas[0])), int(0.25*len(self.mic_canvas)))
         msi_br = (int(0.25*len(self.mic_canvas[0]) + len(self.ms_canvas)*ms_to_mic), int(0.25*len(self.mic_canvas) + len(self.ms_canvas[0])*ms_to_mic))
-        print(self.mic_canvas.shape)
-        print(self.cell_canvas.shape)
-        print(self.ms_canvas.shape)
-        print(msi_tl)
-        print(msi_br)
-        print(ms_to_mic)
-        print(mic_to_ms)
 
         # get list of available cell images and their corresponding masks
         all_images = glob.glob(os.path.join(
@@ -577,8 +565,7 @@ class Validator:
             current_id = current_mask_index + 1
 
         for i in range(len(self.mass_list)):
-            self.ms_canvas[:,:,i] = self.sum_pooling(self.cell_canvas[:,:,i], int(ms_to_mic))
-
+            self.ms_canvas[:,:,i] = skimage.measure.block_reduce(self.cell_canvas[:,:,i], block_size=(int(ms_to_mic), int(ms_to_mic)), func=np.sum)
 
         if self.plot or self.save_img:
             f_mic_canvas = plt.figure()
