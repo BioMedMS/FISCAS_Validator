@@ -2,6 +2,7 @@
 import numpy as np
 import glob
 import os
+from diffusion import diffuse_mask_batched
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
@@ -20,8 +21,8 @@ import pickle
 class Validator:
     def __init__(self,
         cell_types, # define cell populations with CellType objects
-        path_sample_cells="D:/Jan/fiscas-validationKit/Cell_images/microscopy/HuTu80",
-        output="D:/Jan/fiscas-validationKit/output/",
+        path_sample_cells="/home/m_nick02/Downloads/FISCAS Validator/Cell_images/microscopy/HuTu80",
+        output="/home/m_nick02/Desktop/Projekt MALDI/maldi-sim/FISCAS_Validator/output",
         allow_multiplets=True, # allow placement of cell clusters
         use_perfect_registration=False, # skip registration by using the inverse of perturbation transform
         use_perfect_segmentation=False, # skip segmentation by using the ground truth masks
@@ -45,7 +46,15 @@ class Validator:
         render_animation=False, # render animation of spectra compilation
         texture=None, # apply texture to msi canvas
         texture_path="./texture.jpg", 
-        texture_epsilon=1):  #strength of texture; -1 < epsilon < 1
+        texture_epsilon=1, #strength of texture; -1 < epsilon < 1
+        diffusion_total_time=500.0,
+        diffusion_dt=0.1,
+        diffusion_coeff=1.0,
+        diffusion_target_max_area=10.0,
+        diffusion_smooth_window=7,
+        diffusion_min_boundary_points=160,
+        diffusion_barrier_alpha=0.1,
+        diffusion_barrier_conserve=False):  
         
         self.cell_types = cell_types
         self.path_sample_cells = path_sample_cells
@@ -81,6 +90,14 @@ class Validator:
         self.texture = texture
         self.texture_path = texture_path
         self.texture_epsilon = texture_epsilon
+        self.diffusion_total_time=diffusion_total_time
+        self.diffusion_dt=diffusion_dt
+        self.diffusion_coeff=diffusion_coeff
+        self.diffusion_target_max_area=diffusion_target_max_area
+        self.diffusion_smooth_window=diffusion_smooth_window
+        self.diffusion_min_boundary_points=diffusion_min_boundary_points
+        self.diffusion_barrier_alpha=diffusion_barrier_alpha
+        self.diffusion_barrier_conserve=diffusion_barrier_conserve
         plt.rcParams.update({'figure.max_open_warning': 0})
         return None
 
@@ -200,14 +217,12 @@ class Validator:
             intensities_all_mz[:,:, i] = rescaled_intensities
         return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
-
     # calculate the density of cells on the mask canvas
     def calculate_cell_density(self):
         total_area = self.mask_canvas.shape[0] * self.mask_canvas.shape[1]
         cell_area = np.count_nonzero(self.mask_canvas)
         density = cell_area / total_area
         return density
-
 
     # interpret registration results (2d-affine)
     def decompose_affine_2d(self, matrix):
@@ -216,7 +231,6 @@ class Validator:
         scale = s
         shear_angle = np.arctan2(rotation[0, 1], rotation[0, 0])
         return rotation, scale, shear_angle
-
 
     def calculate_rotation_angle(self, rotation_matrix):
         a, b = rotation_matrix[0]
@@ -334,7 +348,6 @@ class Validator:
                 self.registration_metrics['theta_rad'] = theta_rad
         return None
 
-
     def rotate_coordinates(self, coords, angle_deg, center_point):
         angle_rad = radians(angle_deg)
         rotation_matrix = np.array([
@@ -349,7 +362,6 @@ class Validator:
             rotated_coords.append((new_x, new_y))
         return rotated_coords
 
-
     def scale_coordinates(self, coords, scale_factors, center_point):
         scaled_coords = []
         for x, y in coords:
@@ -358,7 +370,6 @@ class Validator:
             new_x, new_y = scaled_translated_coords + center_point
             scaled_coords.append((new_x, new_y))
         return np.array(scaled_coords)
-
 
     def evaluate_registration(self):
         error = []
@@ -399,7 +410,6 @@ class Validator:
         self.registration_metrics["mre_std"] = np.std(np.abs(error), axis=0)
         return None
 
-
     # SITK helper function
     def normalize_to_uint8(self, img):
         arr = sitk.GetArrayFromImage(img)
@@ -408,7 +418,6 @@ class Validator:
         uint8_img = sitk.GetImageFromArray(uint8_arr)
         uint8_img.CopyInformation(img)
         return uint8_img
-
 
     def calculate_iou(self, mask1, mask2):
         intersection = np.logical_and(mask1, mask2).sum()
@@ -426,15 +435,13 @@ class Validator:
         row_ind, col_ind = linear_sum_assignment(-iou_matrix)  # Negative for maximization
         matches = [(i, j) for i, j in zip(row_ind, col_ind) if iou_matrix[i, j] > 0.5]
         return matches, iou_matrix
-
-    
+ 
     # convert label image to binary masks
     def label_image_to_masks(self, label_image):
         unique_labels = np.unique(label_image)
         unique_labels = unique_labels[unique_labels != 0]
         masks = [(label_image == label_id) for label_id in unique_labels]
         return masks
-
 
     def evaluate_segmentation(self, predictions, ground_truths, iou_threshold=0.5):
         matches, iou_matrix = self.match_masks(predictions, ground_truths)
@@ -451,7 +458,6 @@ class Validator:
         f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
         return iou_all_masks, precision, recall, f1_score
 
-
     def add_texture(self, image, texture_path="./texture.jpg"):
         if np.abs(self.texture_epsilon) > 1:
             self.texture_epsilon /= np.abs(self.texture_epsilon)  # catch epsilon values outside of [-1, 1]
@@ -466,7 +472,6 @@ class Validator:
         combined_image = np.zeros_like(image)
         combined_image = texture + image
         return combined_image
-
 
     def main(self):
         # print("populating canvas...")
@@ -563,30 +568,43 @@ class Validator:
                                 # store total msi cell intensity
                                 self.cell_intensities[cell_id] = cell_intensities
             current_id = current_mask_index + 1
-
+        
+        h, w = self.mask_canvas.shape
+        self.cell_canvas = diffuse_mask_batched(
+            self.mask_canvas[h//4 : -h//4, w//4 : -w//4],
+            self.cell_canvas,
+            total_time=self.diffusion_total_time,
+            dt=self.diffusion_dt,
+            diffusion_coeff=self.diffusion_coeff,
+            target_max_area=self.diffusion_target_max_area,
+            smooth_window=self.diffusion_smooth_window,
+            min_boundary_points=self.diffusion_min_boundary_points,
+            barrier_alpha=self.diffusion_barrier_alpha,
+            barrier_conserve=self.diffusion_barrier_conserve
+        )
         for i in range(len(self.mass_list)):
             self.ms_canvas[:,:,i] = skimage.measure.block_reduce(self.cell_canvas[:,:,i], block_size=(int(ms_to_mic), int(ms_to_mic)), func=np.sum)
 
         if self.plot or self.save_img:
             f_mic_canvas = plt.figure()
-            #plt.title("Microscopy Canvas")
+            f_mic_canvas.canvas.manager.set_window_title("Microscopy Canvas")
             plt.imshow(self.mic_canvas[:,:])
             plt.axis('off')
             f_mask_canvas = plt.figure()
-            #plt.title("Ground Truth Mask Canvas")
+            f_mask_canvas.canvas.manager.set_window_title("Ground Truth Mask Canvas")
             masked_canvas = np.ma.masked_where(self.mask_canvas == 0, self.mask_canvas)
             my_cmap = plt.cm.prism.copy()
             my_cmap.set_bad(color='black')  # Set the color for masked values
             plt.imshow(masked_canvas, cmap=my_cmap)
             plt.axis('off')
             f_cell_canvas = plt.figure()
-            #plt.title("MSI Canvas")
+            f_cell_canvas.canvas.manager.set_window_title("MSI Canvas Origin Resolution")
             print(np.max(self.cell_canvas[:,:,0]))
             print(np.percentile(self.cell_canvas[:,:,0], 99.))
             plt.imshow(self.cell_canvas[:,:,0], vmax=np.percentile(self.cell_canvas[:,:,0], 99.), cmap='inferno')
             plt.axis('off')
             f_msi_canvas = plt.figure()
-            #plt.title("MSI Canvas")
+            f_msi_canvas.canvas.manager.set_window_title("MSI Canvas Target Resolution")
             print(np.max(self.ms_canvas[:,:,0]))
             print(np.percentile(self.ms_canvas[:,:,0], 99.))
             plt.imshow(self.ms_canvas[:,:,0], vmax=np.percentile(self.ms_canvas[:,:,0], 99.), cmap='inferno')
@@ -762,8 +780,6 @@ class Validator:
             plt.axis('off')
             if self.save_img:
                 plt.savefig(self.output + "/registration_overlay.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-
-
 
         self.interpret_registration_matrix(self.final_transform.GetNthTransform(0))
 
@@ -1047,12 +1063,19 @@ valid = Validator(
     ms_spacing=5, 
     plot=True, 
     save_img=True, 
-    canvas_size=1200, 
+    canvas_size=600, 
     cell_density=0.2, 
-    diffusion=0,
     mass_list=mass_list,
     cell_types = [A, B],
-    render_animation=False)#,
+    render_animation=False,
+    diffusion_total_time=500.0,
+    diffusion_dt=0.1,
+    diffusion_coeff=1.0,
+    diffusion_target_max_area=10.0,
+    diffusion_smooth_window=7,
+    diffusion_min_boundary_points=160,
+    diffusion_barrier_alpha=1,
+    diffusion_barrier_conserve=False)#,
     #texture='registration',
     #texture_path="./textures/noise_150x150.jpg",
     #texture_epsilon=0.5)
