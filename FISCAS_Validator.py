@@ -21,8 +21,8 @@ import pickle
 class Validator:
     def __init__(self,
         cell_types, # define cell populations with CellType objects
-        path_sample_cells="/home/m_nick02/Downloads/FISCAS Validator/Cell_images/microscopy/HuTu80",
-        output="/home/m_nick02/Desktop/Projekt MALDI/maldi-sim/FISCAS_Validator/output",
+        path_sample_cells="./Cell_images/microscopy/HuTu80",
+        output="./output",
         allow_multiplets=True, # allow placement of cell clusters
         use_perfect_registration=False, # skip registration by using the inverse of perturbation transform
         use_perfect_segmentation=False, # skip segmentation by using the ground truth masks
@@ -45,7 +45,7 @@ class Validator:
         cell_diameter=0, # parameter for cell segmentation
         render_animation=False, # render animation of spectra compilation
         texture=None, # apply texture to msi canvas
-        texture_path="./texture.jpg", 
+        texture_path="./textures/texture.jpg", 
         texture_epsilon=1, #strength of texture; -1 < epsilon < 1
         diffusion_total_time=500.0,
         diffusion_dt=0.1,
@@ -133,6 +133,14 @@ class Validator:
             "texture": self.texture,
             "texture_path": self.texture_path,
             "texture_epsilon": self.texture_epsilon,
+            "diffusion_total_time": self.diffusion_total_time,
+            "diffusion_dt": self.diffusion_dt,
+            "diffusion_coeff": self.diffusion_coeff,
+            "diffusion_target_max_area": self.diffusion_target_max_area,
+            "diffusion_smooth_window": self.diffusion_smooth_window,
+            "diffusion_min_boundary_points": self.diffusion_min_boundary_points,
+            "diffusion_barrier_alpha": self.diffusion_barrier_alpha,
+            "diffusion_barrier_conserve": self.diffusion_barrier_conserve   
         }
         return settings
 
@@ -266,9 +274,9 @@ class Validator:
         pertubation_transform.AddTransform(rotation_transform)
         pertubation_transform.AddTransform(scaling_transform)
         if inverse == True:
-            transformed_image = sitk.Resample(img, img, pertubation_transform.GetInverse(), sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
+            transformed_image = sitk.Resample(img, img, pertubation_transform.GetInverse(), sitk.sitkLinear, 0.0, img.GetPixelID())
         else:
-            transformed_image = sitk.Resample(img, img, pertubation_transform, sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
+            transformed_image = sitk.Resample(img, img, pertubation_transform, sitk.sitkLinear, 0.0, img.GetPixelID())
         if not isinstance(image, sitk.Image):
             return pertubation_transform, sitk.GetArrayFromImage(transformed_image)
         else:
@@ -556,7 +564,7 @@ class Validator:
                                         len(mask), p_top_left[0]:p_top_left[0]+len(mask[0])]
                             cell_mask[mask_region == cell_id] = cell_id
                             msi_cell, cell_intensities = self.generate_maldi_cell(
-                                cell_mask, sigma=20)
+                                cell_mask, sigma=40)
                             #print(f"Cell ID {cell_id} with intensities {cell_intensities}")
                             if (p_top_left_cell[0] >= 0) & (p_top_left_cell[1] >= 0) & (p_bottom_right_cell[0] < len(self.cell_canvas[0])) & (p_bottom_right_cell[1] < len(self.cell_canvas)):
                                 for j in range(len(self.mass_list)):
@@ -568,9 +576,9 @@ class Validator:
                                 # store total msi cell intensity
                                 self.cell_intensities[cell_id] = cell_intensities
             current_id = current_mask_index + 1
-        
+        self.diffusion_canvas = np.zeros_like(self.cell_canvas)
         h, w = self.mask_canvas.shape
-        self.cell_canvas = diffuse_mask_batched(
+        self.diffusion_canvas = diffuse_mask_batched(
             self.mask_canvas[h//4 : -h//4, w//4 : -w//4],
             self.cell_canvas,
             total_time=self.diffusion_total_time,
@@ -583,7 +591,7 @@ class Validator:
             barrier_conserve=self.diffusion_barrier_conserve
         )
         for i in range(len(self.mass_list)):
-            self.ms_canvas[:,:,i] = skimage.measure.block_reduce(self.cell_canvas[:,:,i], block_size=(int(ms_to_mic), int(ms_to_mic)), func=np.sum)
+            self.ms_canvas[:,:,i] = skimage.measure.block_reduce(self.diffusion_canvas[:,:,i], block_size=(int(ms_to_mic), int(ms_to_mic)), func=np.sum)
 
         if self.plot or self.save_img:
             f_mic_canvas = plt.figure()
@@ -599,14 +607,14 @@ class Validator:
             plt.axis('off')
             f_cell_canvas = plt.figure()
             f_cell_canvas.canvas.manager.set_window_title("MSI Canvas Origin Resolution")
-            print(np.max(self.cell_canvas[:,:,0]))
-            print(np.percentile(self.cell_canvas[:,:,0], 99.))
             plt.imshow(self.cell_canvas[:,:,0], vmax=np.percentile(self.cell_canvas[:,:,0], 99.), cmap='inferno')
+            plt.axis('off')
+            f_diffusion_canvas = plt.figure()
+            f_diffusion_canvas.canvas.manager.set_window_title("MSI Canvas After Diffusion")
+            plt.imshow(self.diffusion_canvas[:,:,0], vmax=np.percentile(self.diffusion_canvas[:,:,0], 99.), cmap='inferno')
             plt.axis('off')
             f_msi_canvas = plt.figure()
             f_msi_canvas.canvas.manager.set_window_title("MSI Canvas Target Resolution")
-            print(np.max(self.ms_canvas[:,:,0]))
-            print(np.percentile(self.ms_canvas[:,:,0], 99.))
             plt.imshow(self.ms_canvas[:,:,0], vmax=np.percentile(self.ms_canvas[:,:,0], 99.), cmap='inferno')
             plt.axis('off')
             x_coords = []
@@ -672,7 +680,7 @@ class Validator:
         scaling_factor = int(maldi_sitk.GetSpacing()[0] / mic_sitk.GetSpacing()[0])
         self.moving_spacing = maldi_sitk.GetSpacing()[0] / scaling_factor
         moving_size = (maldi_sitk.GetSize()[0] * scaling_factor, maldi_sitk.GetSize()[1] * scaling_factor)
-        moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkNearestNeighbor, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
+        moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkLinear, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
 
         mic_landmarks = [[msi_tl[0]*self.mic_spacing, msi_tl[1]*self.mic_spacing],
                           [msi_tl[0]*self.mic_spacing, msi_br[1]*self.mic_spacing],
@@ -1037,7 +1045,7 @@ mass_list = [0,1,2,3]
 seed = 2
 random.seed(seed)
 np.random.seed(seed)
-parameters_A = {mass_list[0] : ["normal", 15, 5], 
+parameters_A = {mass_list[0] : ["normal", 15, 1], 
                 mass_list[1] : ["normal", 25, 5],
                 mass_list[2] : ["normal", 15, 5],
                 mass_list[3] : ["uniform", 0, 0]
@@ -1053,28 +1061,28 @@ B = CellType("B", parameters_B, 0.5)
 
 valid = Validator(
     use_perfect_segmentation=True, 
-    use_perfect_registration=False, 
+    use_perfect_registration=True,
     allow_multiplets=True,
     remove_ambiguous=False,
-    seed=1, 
+    seed=9502, 
     scale=1, 
-    teaching_imprecision=15, 
-    rotation=5, 
+    teaching_imprecision=5, 
+    rotation=0, 
     ms_spacing=5, 
     plot=True, 
     save_img=True, 
-    canvas_size=600, 
+    canvas_size=1000, 
     cell_density=0.2, 
     mass_list=mass_list,
     cell_types = [A, B],
     render_animation=False,
-    diffusion_total_time=500.0,
+    diffusion_total_time=300.0,
     diffusion_dt=0.1,
-    diffusion_coeff=1.0,
+    diffusion_coeff=10.0,
     diffusion_target_max_area=10.0,
     diffusion_smooth_window=7,
     diffusion_min_boundary_points=160,
-    diffusion_barrier_alpha=1,
+    diffusion_barrier_alpha=0.1,
     diffusion_barrier_conserve=False)#,
     #texture='registration',
     #texture_path="./textures/noise_150x150.jpg",
