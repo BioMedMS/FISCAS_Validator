@@ -54,7 +54,7 @@ class Validator:
         diffusion_smooth_window=7,
         diffusion_min_boundary_points=160,
         diffusion_barrier_alpha=0.1,
-        diffusion_barrier_conserve=False):  
+        diffusion_leaky_outer_boundary=False):  
         
         self.cell_types = cell_types
         self.path_sample_cells = path_sample_cells
@@ -97,7 +97,7 @@ class Validator:
         self.diffusion_smooth_window=diffusion_smooth_window
         self.diffusion_min_boundary_points=diffusion_min_boundary_points
         self.diffusion_barrier_alpha=diffusion_barrier_alpha
-        self.diffusion_barrier_conserve=diffusion_barrier_conserve
+        self.diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary
         plt.rcParams.update({'figure.max_open_warning': 0})
         return None
 
@@ -588,7 +588,7 @@ class Validator:
             smooth_window=self.diffusion_smooth_window,
             min_boundary_points=self.diffusion_min_boundary_points,
             barrier_alpha=self.diffusion_barrier_alpha,
-            barrier_conserve=self.diffusion_barrier_conserve
+            leaky_outer_boundary=self.diffusion_leaky_outer_boundary
         )
         for i in range(len(self.mass_list)):
             self.ms_canvas[:,:,i] = skimage.measure.block_reduce(self.diffusion_canvas[:,:,i], block_size=(int(ms_to_mic), int(ms_to_mic)), func=np.sum)
@@ -1061,7 +1061,7 @@ B = CellType("B", parameters_B, 0.5)
 
 valid = Validator(
     use_perfect_segmentation=True, 
-    use_perfect_registration=True,
+    use_perfect_registration=True, 
     allow_multiplets=True,
     remove_ambiguous=False,
     seed=9502, 
@@ -1078,12 +1078,12 @@ valid = Validator(
     render_animation=False,
     diffusion_total_time=300.0,
     diffusion_dt=0.1,
-    diffusion_coeff=10.0,
+    diffusion_coeff=10,
     diffusion_target_max_area=10.0,
     diffusion_smooth_window=7,
     diffusion_min_boundary_points=160,
     diffusion_barrier_alpha=0.1,
-    diffusion_barrier_conserve=False)#,
+    diffusion_leaky_outer_boundary=True)#,
     #texture='registration',
     #texture_path="./textures/noise_150x150.jpg",
     #texture_epsilon=0.5)

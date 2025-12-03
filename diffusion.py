@@ -238,16 +238,41 @@ def find_barrier_edges(triangles, inside_tri):
 
     return barrier_edges
 
-def weaken_diffusion_on_edges(K, barrier_edges, alpha=0.1, conserve=True):
+def find_outer_boundary_vertices(triangles):
+    """Return the indices of vertices that lie on the *outer* boundary
+    of the triangulated canvas.
+
+    We detect boundary edges as those that belong to exactly one triangle.
+    The endpoints of such edges are boundary vertices.
+
+    Note: inner mask boundaries are shared by two triangles, so they are
+    not picked up here.
     """
-    Weaken diffusion across the given edges by factor alpha in (0,1].
+    edge_map = build_edge_triangle_map(triangles)
+    boundary_vertices = set()
+    for (i, j), tri_list in edge_map.items():
+        if len(tri_list) == 1:
+            boundary_vertices.add(i)
+            boundary_vertices.add(j)
+    return np.array(sorted(boundary_vertices), dtype=int)
 
-    If conserve=True:
-      - scale K[i, j] and K[j, i] by alpha
-      - adjust K[i, i] and K[j, j] so that row sums stay zero (mass-conserving)
+def weaken_diffusion_on_edges(K, barrier_edges, alpha=0.1):
+    """Mass-conserving weakening of diffusion across the given edges.
 
-    If conserve=False:
-      - only scale off-diagonals => introduces leakage across those edges.
+    Parameters
+    ----------
+    K : sparse matrix
+        Global stiffness matrix.
+    barrier_edges : iterable of (i, j)
+        Vertex index pairs for edges that should have reduced diffusion.
+    alpha : float in (0, 1]
+        Factor by which to scale diffusion across those edges.
+        alpha = 1.0 -> no barrier (full permeability)
+        alpha < 1.0 -> reduced permeability.
+
+    This function always preserves the row-sum-zero structure of K,
+    so diffusion across the mask boundary does *not* create or destroy
+    mass. It only reduces the flux between the two sides.
     """
     K_lil = K.tolil(copy=True)
 
@@ -271,10 +296,9 @@ def weaken_diffusion_on_edges(K, barrier_edges, alpha=0.1, conserve=True):
         K_lil[i, j] = kij_new
         K_lil[j, i] = kji_new
 
-        if conserve:
-            # Adjust diagonals so that row sums remain unchanged
-            K_lil[i, i] -= delta_ij
-            K_lil[j, j] -= delta_ji
+        # Adjust diagonals so that row sums remain unchanged
+        K_lil[i, i] -= delta_ij
+        K_lil[j, j] -= delta_ji
 
     return K_lil.tocsr()
 
@@ -290,10 +314,9 @@ def diffuse_mask_batched(
     smooth_window=7,
     min_boundary_points=160,
     barrier_alpha=0.1,
-    barrier_conserve=True,
+    leaky_outer_boundary=True,
     ):
-    """
-    Perform diffusion on a domain defined by 'mask', for a batch of initial
+    """Perform diffusion on a domain defined by 'mask', for a batch of initial
     fields given in 'u0_batch'.
 
     Parameters
@@ -319,17 +342,16 @@ def diffuse_mask_batched(
         Parameters for triangulation and boundary smoothing.
 
     barrier_alpha : float in (0,1]
-        Factor to weaken diffusion across mask boundary.
-        alpha=1.0 => no barrier; alpha<<1 => nearly impermeable.
+        Factor to weaken diffusion across *mask* boundary (between inside
+        and outside). This is always mass-conserving.
 
-    barrier_conserve : bool
-        If True: mass-conserving barrier (no leakage across interface).
-        If False: leaky barrier across mask boundary.
-
-    Returns
-    -------
-    u_final_grid : (H, W, B) ndarray
-        Final diffused fields at time total_time, mapped back to the grid.
+    leaky_outer_boundary : bool
+        If False (default), the outer canvas boundary has the usual
+        no-flux (Neumann) condition: total mass is conserved (up to
+        numerical error).
+        If True, after each timestep we clamp the solution to zero at
+        the outer boundary vertices, so mass can leak out of the image
+        across its border.
     """
     mask_arr = np.asarray(mask)
     u0_arr = np.asarray(u0_batch)
@@ -353,10 +375,16 @@ def diffuse_mask_batched(
     # 2) Assemble FEM matrices
     M, K = assemble_M_and_K(vertices, triangles, diffusion_coeff=diffusion_coeff)
 
-    # 3) Build barrier edges from mask
+    # 3) Build barrier edges from mask (mass-conserving)
     inside_tri = classify_triangles_by_centroid(vertices, triangles, mask_bool)
     barrier_edges = find_barrier_edges(triangles, inside_tri)
-    K = weaken_diffusion_on_edges(K, barrier_edges, alpha=barrier_alpha, conserve=barrier_conserve)
+    K = weaken_diffusion_on_edges(K, barrier_edges, alpha=barrier_alpha)
+
+    # Outer canvas boundary vertices (for optional leakage)
+    if leaky_outer_boundary:
+        outer_boundary_vertices = find_outer_boundary_vertices(triangles)
+    else:
+        outer_boundary_vertices = None
 
     Nv = vertices.shape[0]
     B = u0_arr.shape[2]
@@ -374,7 +402,7 @@ def diffuse_mask_batched(
     # 5) Implicit Euler time-stepping: (M + dt K) U^{n+1} = M U^n
     num_steps = int(np.round(total_time / dt))
     if num_steps < 1:
-        return u0_arr.copy()
+        raise ValueError("total_time must be >= dt.")
 
     A = M + dt * K
     A_factorized = spla.factorized(A.tocsc())
@@ -384,6 +412,9 @@ def diffuse_mask_batched(
         # Solve for each batch slice
         for b in range(B):
             U[:, b] = A_factorized(rhs[:, b])
+            if outer_boundary_vertices is not None:
+                # Dirichlet 0 on outer canvas boundary => leak out
+                U[outer_boundary_vertices, b] = 0.0
 
     # 6) Map final vertex values back to grid using FEM interpolation
     import matplotlib.tri as mtri
@@ -399,11 +430,9 @@ def diffuse_mask_batched(
     u_final_grid = np.empty((H, W, B), dtype=float)
 
     for b in range(B):
-        # piecewise-linear interpolator for this batch layer
-        interp = mtri.LinearTriInterpolator(triang, U[:, b])
-
-        # evaluate at all pixel centers
-        z = interp(x_flat, y_flat)   # masked array (mask=True outside triangulation)
+        u_vals = U[:, b]
+        interpolator = mtri.LinearTriInterpolator(triang, u_vals)
+        z = interpolator(x_flat, y_flat)
         z = z.reshape(H, W)
 
         # start from original grid values
