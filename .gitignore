@@ -4,7 +4,7 @@
 /output
 /reports
 /textures
-test.py
+*test*.py
 test.ipynb
 *.pyc
 __pycache__/
