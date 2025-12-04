@@ -1,11 +1,17 @@
 ---
- title: Validator Report
- echo: False
- toc: False
+title: Validator Report
+echo: False
+toc: False
 
- format:
+format:
   pdf: default
+
+execute:
+  cache: true
+
+freeze: auto
 ---
+
 # Registration Report
 ```{python}
 #| output: False
