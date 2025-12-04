@@ -101,7 +101,6 @@ max_workers = os.cpu_count()
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
     futures = [executor.submit(run_quarto, task) for task in commands]
-
     for f in as_completed(futures):
         idx, returncode = f.result()
         status = "OK" if returncode == 0 else f"FAILED ({returncode})"

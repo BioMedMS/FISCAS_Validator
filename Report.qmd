@@ -197,7 +197,7 @@ display(HTML(html_table))
 
 ![Spectra Compilation Histogram](`{python} filename`){#fig-spectra_hist}
 
-![FPR Histogram](./output/fpr_hist.svg){#fig-fpr_hist}
+![FPR Histogram](`{python} f"{output}/fpr_hist.svg"`){#fig-fpr_hist}
 
 ```{python}
 df = pd.DataFrame(list(spectra_metrics.items()), columns=['Key', 'Value'])
