@@ -9,3 +9,4 @@ test.ipynb
 *.pyc
 __pycache__/
 *.pkl
+render_animation.py

@@ -912,7 +912,7 @@ class Validator:
                             text_coverage.set_text(f"GT deviation: {(intensity-cells[cell_id,0])*100/intensity:.2f}%")
                         except Exception as e:
                             continue
-                    plt.savefig(f"D:/Jan/fiscas-validationKit/output/animation/img_{k}.jpg", dpi=300)
+                    plt.savefig(f"./output/animation/img_{k}.jpg", dpi=300)
                     plt.close()
                 k += 1
 
@@ -1068,7 +1068,7 @@ valid = Validator(
     scale=1, 
     teaching_imprecision=5, 
     rotation=0, 
-    ms_spacing=5, 
+    ms_spacing=10, 
     plot=True, 
     save_img=True, 
     canvas_size=1000, 
@@ -1078,13 +1078,13 @@ valid = Validator(
     render_animation=False,
     diffusion_total_time=300.0,
     diffusion_dt=0.1,
-    diffusion_coeff=10,
+    diffusion_coeff=3,
     diffusion_target_max_area=10.0,
     diffusion_smooth_window=7,
     diffusion_min_boundary_points=160,
-    diffusion_barrier_alpha=0.1,
-    diffusion_leaky_outer_boundary=True)#,
-    #texture='registration',
-    #texture_path="./textures/noise_150x150.jpg",
-    #texture_epsilon=0.5)
+    diffusion_barrier_alpha=0.5,
+    diffusion_leaky_outer_boundary=True,
+    texture='registration',
+    texture_path="./textures/noise_150x150.jpg",
+    texture_epsilon=0.5)
 valid.main()
