@@ -912,7 +912,7 @@ class Validator:
                             text_coverage.set_text(f"GT deviation: {(intensity-cells[cell_id,0])*100/intensity:.2f}%")
                         except Exception as e:
                             continue
-                    plt.savefig(f"D:/Jan/fiscas-validationKit/output/animation/img_{k}.jpg", dpi=300)
+                    plt.savefig(f"./output/animation/img_{k}.jpg", dpi=300)
                     plt.close()
                 k += 1
 

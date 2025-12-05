@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
 
-cell_path_prefix = "/home/m_nick02/Downloads/FISCAS Validator/Cell_images/microscopy"
+cell_path_prefix = "./Cell_images/microscopy"
 original_quarto_file = "Report.qmd"
 
 # Use a *relative* base for output (matches paths used inside the QMD)
