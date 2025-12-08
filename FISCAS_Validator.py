@@ -20,8 +20,7 @@ import pickle
 
 class Validator:
     def __init__(self,
-        cell_types, # define cell populations with CellType objects
-        path_sample_cells="./Cell_images/microscopy/HuTu80",
+        cell_types, # define cell populations with CellType objects,
         output="./output",
         allow_multiplets=True, # allow placement of cell clusters
         use_perfect_registration=False, # skip registration by using the inverse of perturbation transform
@@ -57,7 +56,6 @@ class Validator:
         diffusion_leaky_outer_boundary=False):  
         
         self.cell_types = cell_types
-        self.path_sample_cells = path_sample_cells
         self.output = output
         self.allow_multiplets = allow_multiplets
         self.use_perfect_registration = use_perfect_registration
@@ -86,6 +84,7 @@ class Validator:
         self.mic_coordinates = {}
         self.msi_coordinates = {}
         self.cell_intensities = {}
+        self.cell_labels = {}
         self.render_animation = render_animation
         self.texture = texture
         self.texture_path = texture_path
@@ -147,14 +146,19 @@ class Validator:
 
     # loads random cell images and their corresponding masks from folder with prepared cell images and applies random rotation and scale
     # returns randomized cell image with its corresponding mask
-    def load_random_cell(self, mask_index=255, seed=None):
+    def load_random_cell(self, cell_directory, mask_index=255, seed=None):
+        all_images = glob.glob(os.path.join(cell_directory, '**', '*.*'), recursive=True)
+        images = sorted([
+            file for file in all_images if 'cell' in os.path.basename(file) and 'mask' not in os.path.basename(file)])
+        masks = sorted([
+            file for file in all_images if 'mask' in os.path.basename(file)])
         if seed is None:
             angle = random.randint(0, 360)
             scaling_factor = random.uniform(0.8, 1.2)
             while True:
-                cell_chosen = random.randint(0, len(self.cell_image_paths)-1)
+                cell_chosen = random.randint(0, len(images)-1)
                 #check if there is more than one cell on the chosen image
-                is_multiplet = "doublet" in self.cell_masks_paths[cell_chosen] or "triplet" in self.cell_masks_paths[cell_chosen] or "multiplet" in self.cell_masks_paths[cell_chosen]
+                is_multiplet = "doublet" in masks[cell_chosen] or "triplet" in masks[cell_chosen] or "multiplet" in masks[cell_chosen]
                 if is_multiplet and not self.allow_multiplets:
                     continue  # Retry if the cell is a multiplet and multiplets are not allowed
                 else:
@@ -163,7 +167,7 @@ class Validator:
             angle = 0
             scaling_factor = 1
             cell_chosen = seed
-        cell_mask = np.array(Image.open(self.cell_masks_paths[cell_chosen]), dtype=np.uint16) # open corresponding cell mask
+        cell_mask = np.array(Image.open(masks[cell_chosen]), dtype=np.uint16) # open corresponding cell mask
         if is_multiplet: # if cell image contains multiple cells, reindex mask ids to match the current running number already placed on canvas
             mask_ids = np.unique(cell_mask)
             for mask_id in mask_ids:
@@ -174,7 +178,7 @@ class Validator:
         else:
             cell_mask[cell_mask > 0] = mask_index
         current_mask_index = mask_index
-        with Image.open(self.cell_image_paths[cell_chosen]) as img: 
+        with Image.open(images[cell_chosen]) as img: 
             cell_image = np.zeros((img.size[1], img.size[0], img.n_frames))
             for i in range(img.n_frames):
                 img.seek(i)
@@ -202,7 +206,7 @@ class Validator:
 
 
     # generate MALDI signal distribution for a given cell mask
-    def generate_maldi_cell(self, mask, sigma=4.0):
+    def generate_maldi_cell(self, cell_type, mask, sigma=4.0):
         mask = copy.deepcopy(mask)
         coords = np.argwhere(mask > 0)
         center_of_mass = coords.mean(axis=0)
@@ -215,7 +219,7 @@ class Validator:
             intensities[x, y] = np.exp(-(distance / sigma)**2) + 0.1
         
         # draw intensity based on cell type distribution
-        cell = random.choices(self.cell_types, weights=[ct.population for ct in self.cell_types], k=1)[0]
+        cell = cell_type
         for i in range(len(self.mass_list)):
             factor = cell.get_intensity(self.mass_list[i])
             if np.sum(intensities) > 0:
@@ -274,9 +278,9 @@ class Validator:
         pertubation_transform.AddTransform(rotation_transform)
         pertubation_transform.AddTransform(scaling_transform)
         if inverse == True:
-            transformed_image = sitk.Resample(img, img, pertubation_transform.GetInverse(), sitk.sitkLinear, 0.0, img.GetPixelID())
+            transformed_image = sitk.Resample(img, img, pertubation_transform.GetInverse(), sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
         else:
-            transformed_image = sitk.Resample(img, img, pertubation_transform, sitk.sitkLinear, 0.0, img.GetPixelID())
+            transformed_image = sitk.Resample(img, img, pertubation_transform, sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
         if not isinstance(image, sitk.Image):
             return pertubation_transform, sitk.GetArrayFromImage(transformed_image)
         else:
@@ -500,12 +504,7 @@ class Validator:
         msi_br = (int(0.25*len(self.mic_canvas[0]) + len(self.ms_canvas)*ms_to_mic), int(0.25*len(self.mic_canvas) + len(self.ms_canvas[0])*ms_to_mic))
 
         # get list of available cell images and their corresponding masks
-        all_images = glob.glob(os.path.join(
-            self.path_sample_cells, '**', '*cell*'), recursive=True)
-        self.cell_image_paths = sorted([
-            file for file in all_images if 'mask' not in os.path.basename(file)])
-        self.cell_masks_paths = sorted([
-            file for file in all_images if 'mask' in os.path.basename(file)])
+        
 
         density = 0
         i = 0 # counter for placement iterations
@@ -521,7 +520,8 @@ class Validator:
             x = random.randint(0, len(self.mic_canvas[0]))
             y = random.randint(0, len(self.mic_canvas))
             p = (x, y)
-            cell, mask, current_mask_index = self.load_random_cell(mask_index=current_id)
+            cell_type = random.choices(self.cell_types, weights=[ct.population for ct in self.cell_types], k=1)[0]
+            cell, mask, current_mask_index = self.load_random_cell(cell_type.get_directory(), mask_index=current_id)
             # prevent cell images to violate canvas border
             p_top_left = (int(p[0] - cell.shape[1] // 2), int(p[1] - cell.shape[0] // 2))
             p_bottom_right = (int(p[0] + cell.shape[1] // 2), int(p[1] + cell.shape[0] // 2))
@@ -563,7 +563,7 @@ class Validator:
                             mask_region = self.mask_canvas[p_top_left[1]:p_top_left[1] +
                                         len(mask), p_top_left[0]:p_top_left[0]+len(mask[0])]
                             cell_mask[mask_region == cell_id] = cell_id
-                            msi_cell, cell_intensities = self.generate_maldi_cell(
+                            msi_cell, cell_intensities = self.generate_maldi_cell(cell_type,
                                 cell_mask, sigma=40)
                             #print(f"Cell ID {cell_id} with intensities {cell_intensities}")
                             if (p_top_left_cell[0] >= 0) & (p_top_left_cell[1] >= 0) & (p_bottom_right_cell[0] < len(self.cell_canvas[0])) & (p_bottom_right_cell[1] < len(self.cell_canvas)):
@@ -575,6 +575,7 @@ class Validator:
                                 self.msi_coordinates[cell_id] = (int(p_ms[0]), int(p_ms[1]))
                                 # store total msi cell intensity
                                 self.cell_intensities[cell_id] = cell_intensities
+                                self.cell_labels[cell_id] = cell_type.name
             current_id = current_mask_index + 1
         self.diffusion_canvas = np.zeros_like(self.cell_canvas)
         h, w = self.mask_canvas.shape
@@ -680,7 +681,7 @@ class Validator:
         scaling_factor = int(maldi_sitk.GetSpacing()[0] / mic_sitk.GetSpacing()[0])
         self.moving_spacing = maldi_sitk.GetSpacing()[0] / scaling_factor
         moving_size = (maldi_sitk.GetSize()[0] * scaling_factor, maldi_sitk.GetSize()[1] * scaling_factor)
-        moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkLinear, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
+        moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkNearestNeighbor, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
 
         mic_landmarks = [[msi_tl[0]*self.mic_spacing, msi_tl[1]*self.mic_spacing],
                           [msi_tl[0]*self.mic_spacing, msi_br[1]*self.mic_spacing],
@@ -721,7 +722,7 @@ class Validator:
             landmark_registration_sitk = sitk.Resample(moving_sitk,
                                          mic_sitk,
                                          landmark_affine_transform,
-                                         sitk.sitkLinear,
+                                         sitk.sitkNearestNeighbor,
                                          0.0,
                                          moving_sitk.GetPixelID()
                                          )
@@ -974,6 +975,9 @@ class Validator:
             spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
             cells_missed_all_mz.append(np.sum(spectra_comparison==100))
 
+
+        
+
         fpr = np.sum(deviation, axis=1) / (np.sum(cells, axis=1) + np.sum(deviation, axis=1)) * 100
         fpr = np.nan_to_num(fpr, 0)
         print(fpr.shape)
@@ -1041,16 +1045,23 @@ class CellType:
             intensity = np.abs(np.random.uniform(low=low, high=high))
         return intensity
 
+
+    def get_directory(self):
+        return self.parameters["path"]
+
+
 mass_list = [0,1,2,3]
 seed = 2
 random.seed(seed)
 np.random.seed(seed)
-parameters_A = {mass_list[0] : ["normal", 15, 1], 
+parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+                mass_list[0] : ["normal", 15, 1], 
                 mass_list[1] : ["normal", 25, 5],
                 mass_list[2] : ["normal", 15, 5],
                 mass_list[3] : ["uniform", 0, 0]
                 }
-parameters_B = {mass_list[0] : ["normal", 15, 5], 
+parameters_B = {"path" : "./Cell_images/microscopy/LS180",
+                mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["uniform", 0, 0],
                 mass_list[2] : ["normal", 25, 5],
                 mass_list[3] : ["normal", 25, 1]
@@ -1067,7 +1078,7 @@ valid = Validator(
     seed=9502, 
     scale=1, 
     teaching_imprecision=5, 
-    rotation=0, 
+    rotation=5, 
     ms_spacing=10, 
     plot=True, 
     save_img=True, 
@@ -1076,7 +1087,7 @@ valid = Validator(
     mass_list=mass_list,
     cell_types = [A, B],
     render_animation=False,
-    diffusion_total_time=300.0,
+    diffusion_total_time=1.0,
     diffusion_dt=0.1,
     diffusion_coeff=3,
     diffusion_target_max_area=10.0,
