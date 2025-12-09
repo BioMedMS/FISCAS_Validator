@@ -364,6 +364,11 @@ def diffuse_mask_batched(
     if u0_arr.shape[0] != H or u0_arr.shape[1] != W:
         raise ValueError("u0_batch first two dims must match mask shape.")
 
+    # --- NEW: if total diffusion time is not larger than dt, skip diffusion ---
+    # (no computation, just return a copy of the original batch)
+    if total_time <= dt:
+        return u0_arr.copy()
+
     # 1) Triangulate from mask
     vertices, triangles, mask_bool = triangulate_from_mask(
         mask_arr,
@@ -401,8 +406,7 @@ def diffuse_mask_batched(
 
     # 5) Implicit Euler time-stepping: (M + dt K) U^{n+1} = M U^n
     num_steps = int(np.round(total_time / dt))
-    if num_steps < 1:
-        raise ValueError("total_time must be >= dt.")
+    # no need for a ValueError any more; we've returned early if total_time <= dt
 
     A = M + dt * K
     A_factorized = spla.factorized(A.tocsc())
@@ -419,11 +423,9 @@ def diffuse_mask_batched(
     # 6) Map final vertex values back to grid using FEM interpolation
     import matplotlib.tri as mtri
 
-    # Triangulation object for interpolation
     triang = mtri.Triangulation(vertices[:, 0], vertices[:, 1], triangles)
 
-    # Pixel centers: (x, y) = (column, row)
-    yy, xx = np.mgrid[0:H, 0:W]  # yy[i,j] = i, xx[i,j] = j
+    yy, xx = np.mgrid[0:H, 0:W]
     x_flat = xx.ravel()
     y_flat = yy.ravel()
 
@@ -435,16 +437,13 @@ def diffuse_mask_batched(
         z = interpolator(x_flat, y_flat)
         z = z.reshape(H, W)
 
-        # start from original grid values
         layer = u0_arr[:, :, b].copy()
 
         if np.ma.isMaskedArray(z):
-            # keep original where outside triangulation, use interpolated where valid
             vals = z.filled(0.0)
             mask_valid = ~z.mask
             layer[mask_valid] = vals[mask_valid]
         else:
-            # no mask: everything covered by triangulation
             layer[:, :] = z
 
         u_final_grid[:, :, b] = layer
