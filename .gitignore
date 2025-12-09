@@ -9,4 +9,6 @@ test.ipynb
 *.pyc
 __pycache__/
 *.pkl
+
+**/*.quarto_ipynb
 render_animation.py
