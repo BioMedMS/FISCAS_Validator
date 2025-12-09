@@ -8,6 +8,10 @@ import matplotlib.patches as patches
 from PIL import Image
 import random
 import skimage
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics.cluster import contingency_matrix 
+from sklearn.metrics import adjusted_rand_score
 import cv2
 from math import radians, cos, sin
 import SimpleITK as sitk
@@ -17,6 +21,9 @@ import copy
 import time
 from scipy.optimize import linear_sum_assignment
 import pickle 
+from sklearn.decomposition import PCA
+
+
 
 class Validator:
     def __init__(self,
@@ -98,6 +105,34 @@ class Validator:
         self.diffusion_barrier_alpha=diffusion_barrier_alpha
         self.diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary
         plt.rcParams.update({'figure.max_open_warning': 0})
+
+        if self.plot:
+            n = len(self.mass_list)
+            c = int(np.ceil(np.sqrt(n)))
+            fig, ax = plt.subplots(c, c) # ToDo Adjust plot for len(mass_list) > 4
+            k = 0
+            colors = ["red", "black", "blue", "green", "orange", "purple", "brown", "pink"]
+            for mz in mass_list:
+                for c, cell_type in enumerate(self.cell_types):
+                    try:
+                        if cell_type.parameters[mz][0] == "normal":
+                            m = cell_type.parameters[mz][1]
+                            s = cell_type.parameters[mz][2]
+                            x = np.linspace(m - 4*s, m + 4*s, 100)
+                            y = (1 / (s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - m) / s) ** 2)
+                            ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - {mz} (μ={m}, σ={s})", color=colors[c])
+                            ax[k//2,k%2].legend()
+                        if cell_type.parameters[mz][0] == "uniform":
+                            m = cell_type.parameters[mz][1]
+                            s = cell_type.parameters[mz][2]
+                            x = np.linspace(m - 4*s, m + 4*s, 100)
+                            y = np.where((x >= m - s) & (x <= m + s), 1/(2*s), 0)
+                            ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - {mz} (μ={m}, σ={s})", color=colors[c])
+                            ax[k//2,k%2].legend()
+                    except Exception as e:
+                        continue
+                k += 1
+                
         return None
 
     # function to return dict with settings for report generation with quarto
@@ -949,7 +984,7 @@ class Validator:
                         spectra_comparison.append((true_int-meas_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 else:
                     mask_id = 0
                     canvas_to_mask[key] = mask_id
@@ -960,7 +995,7 @@ class Validator:
                         spectra_comparison.append((true_int-meas_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 
             
             spectra_comparison = np.array(spectra_comparison) * 100
@@ -975,8 +1010,36 @@ class Validator:
             spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
             cells_missed_all_mz.append(np.sum(spectra_comparison==100))
 
+        spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
+        np.save(self.output + "/true_spectra.npy", spectra)
+        standardized_spectra = StandardScaler().fit_transform(spectra)
+        np.save(self.output + "/standardized_spectra.npy", standardized_spectra)
+        np.save(self.output + "/cell_labels.npy", np.array(list(self.cell_labels.values())))
+        kmeans = KMeans(n_clusters=len(self.cell_types), random_state=self.seed)
+        predicted_labels = kmeans.fit_predict(standardized_spectra)
+        true_labels = np.array(list(self.cell_labels.values()))
+        adjusted_rand = adjusted_rand_score(true_labels, predicted_labels)
+        cont_matrix = contingency_matrix(true_labels, predicted_labels)
+        print(cont_matrix)
+        print(f"Adjusted Rand Index: {adjusted_rand:.4f}")
 
-        
+        if self.plot or self.save_img:
+            pca = PCA(n_components=2)
+            pca_result = pca.fit_transform(standardized_spectra)
+            # encode true_labels to integers (0..n_unique-1) without overwriting the original array
+            unique_labels, true_labels_int = np.unique(true_labels, return_inverse=True)
+            print(f"{len(unique_labels)} unique labels -> mapping: {dict(enumerate(unique_labels))}")
+            plt.figure(figsize=(8,6))
+            scatter = plt.scatter(pca_result[:, 0], pca_result[:, 1], c=true_labels_int, cmap='prism', alpha=0.7, linewidth=1.5)
+            handles, _ = scatter.legend_elements()
+            plt.xlabel('PC1')
+            plt.ylabel('PC2')
+            plt.title('PCA of Standardized Spectra')
+            plt.legend(handles, unique_labels, title="True Label")
+            plt.show()
+            if self.save_img:
+                plt.savefig(self.output + "/pca.svg", bbox_inches='tight', pad_inches=0, dpi=600)
+
 
         fpr = np.sum(deviation, axis=1) / (np.sum(cells, axis=1) + np.sum(deviation, axis=1)) * 100
         fpr = np.nan_to_num(fpr, 0)
@@ -1011,6 +1074,9 @@ class Validator:
             pickle.dump(self.cell_intensities, f)
         with open('cells.pkl', 'wb') as f:
             pickle.dump(cells, f)
+        with open('cell_labels.pkl', 'wb') as f:
+            pickle.dump(self.cell_labels, f)
+            
         
         return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics
 
@@ -1055,16 +1121,16 @@ seed = 2
 random.seed(seed)
 np.random.seed(seed)
 parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
-                mass_list[0] : ["normal", 15, 1], 
-                mass_list[1] : ["normal", 25, 5],
-                mass_list[2] : ["normal", 15, 5],
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 15, 3],
+                mass_list[2] : ["normal", 15, 3],
                 mass_list[3] : ["uniform", 0, 0]
                 }
-parameters_B = {"path" : "./Cell_images/microscopy/LS180",
+parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["uniform", 0, 0],
-                mass_list[2] : ["normal", 25, 5],
-                mass_list[3] : ["normal", 25, 1]
+                mass_list[1] : ["normal", 22, 3],
+                mass_list[2] : ["normal", 8, 3],
+                mass_list[3] : ["uniform", 0, 0]
                 }
 
 A = CellType("A", parameters_A, 0.5)
@@ -1079,10 +1145,10 @@ valid = Validator(
     scale=1, 
     teaching_imprecision=5, 
     rotation=5, 
-    ms_spacing=10, 
+    ms_spacing=5, 
     plot=True, 
     save_img=True, 
-    canvas_size=1000, 
+    canvas_size=1500, 
     cell_density=0.2, 
     mass_list=mass_list,
     cell_types = [A, B],
