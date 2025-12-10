@@ -1,0 +1,12 @@
+numpy
+scikit-image
+triangle
+scipy
+matplotlib
+Pillow
+opencv-python
+SimpleITK
+cellpose
+tqdm
+ipywidgets
+ipython

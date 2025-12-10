@@ -2,7 +2,6 @@
 import numpy as np
 import glob
 import os
-from diffusion import diffuse_mask_batched
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from PIL import Image
@@ -23,6 +22,10 @@ from scipy.optimize import linear_sum_assignment
 import pickle 
 from sklearn.decomposition import PCA
 
+
+
+from canvas_generation import generate_and_plot_canvases
+from diffusion import diffuse_mask_batched
 
 
 class Validator:
@@ -167,7 +170,8 @@ class Validator:
             "diffusion_target_max_area": self.diffusion_target_max_area,
             "diffusion_smooth_window": self.diffusion_smooth_window,
             "diffusion_min_boundary_points": self.diffusion_min_boundary_points,
-            "diffusion_barrier_alpha": self.diffusion_barrier_alpha
+            "diffusion_barrier_alpha": self.diffusion_barrier_alpha,
+            "diffusion_leaky_outer_boundary": self.diffusion_leaky_outer_boundary  
         }
         return settings
 
@@ -472,181 +476,41 @@ class Validator:
         return masks
 
     def evaluate_segmentation(self, predictions, ground_truths, iou_threshold=0.5):
+        # Edge cases: nothing to compare
+        if len(predictions) == 0 and len(ground_truths) == 0:
+            return {}, 0.0, 0.0, 0.0
+        if len(predictions) == 0:
+            # all ground truths are missed -> recall = 0
+            return {}, 0.0, 0.0, 0.0
+        if len(ground_truths) == 0:
+            # all predictions are false positives -> precision = 0
+            return {}, 0.0, 0.0, 0.0
+
         matches, iou_matrix = self.match_masks(predictions, ground_truths)
+
         iou_all_masks = {}
         for pred_index, gt_index in matches:
             iou_all_masks[gt_index] = iou_matrix[pred_index, gt_index]
-        tp = len(matches) # tp = true positives
+
+        tp = len(matches)  # true positives
         matched_pred_indices = {pred_index for pred_index, _ in matches}
-        fp = len(predictions) - len(matched_pred_indices) # fp = false positives
+        fp = len(predictions) - len(matched_pred_indices)  # false positives
         matched_gt_indices = {gt_index for _, gt_index in matches}
-        fn = len(ground_truths) - len(matched_gt_indices) # fn = false negatives
-        precision = tp / (tp + fp) if (tp + fp) > 0 else 0
-        recall = tp / (tp + fn) if (tp + fn) > 0 else 0
-        f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0
+        fn = len(ground_truths) - len(matched_gt_indices)  # false negatives
+
+        precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+        recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+        f1_score = (
+            2 * precision * recall / (precision + recall)
+            if (precision + recall) > 0
+            else 0.0
+        )
         return iou_all_masks, precision, recall, f1_score
 
-    def add_texture(self, image, texture_path="./texture.jpg"):
-        if np.abs(self.texture_epsilon) > 1:
-            self.texture_epsilon /= np.abs(self.texture_epsilon)  # catch epsilon values outside of [-1, 1]
-        image = np.array(image)
-        texture = np.array(Image.open(texture_path))
-        if len(texture.shape) == 3:
-            texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
-        texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
-        texture = texture / np.max(texture) * self.texture_epsilon # Normalize texture and weight it by epsilon
-        intensity = np.percentile(image, 99)
-        texture = skimage.exposure.rescale_intensity(texture, in_range=(0,1), out_range=(0, intensity))
-        combined_image = np.zeros_like(image)
-        combined_image = texture + image
-        return combined_image
-
+    
     def main(self):
-        # print("populating canvas...")
-        start = time.perf_counter()
-        scaling_factor = int(self.ms_spacing / self.mic_spacing)
-        self.mic_spacing = self.ms_spacing / scaling_factor
-        mic_to_ms = self.mic_spacing / self.ms_spacing
-        ms_to_mic = self.ms_spacing / self.mic_spacing
-        # initializing empty canvasses
-        self.mic_canvas = np.zeros(
-            (int(self.canvas_size / self.mic_spacing), int(self.canvas_size / self.mic_spacing), 3))
-        self.mask_canvas = np.zeros(
-            (int(self.canvas_size / self.mic_spacing), int(self.canvas_size / self.mic_spacing)))
-        self.cell_canvas = np.zeros(
-            (int(0.5*self.canvas_size / self.mic_spacing), int(0.5*self.canvas_size / self.mic_spacing), len(self.mass_list)))
-        self.ms_canvas = np.zeros((int(len(self.mic_canvas)*0.5*mic_to_ms), int(len(self.mic_canvas)*0.5*mic_to_ms), len(self.mass_list)))
-        msi_tl = (int(0.25*len(self.mic_canvas[0])), int(0.25*len(self.mic_canvas)))
-        msi_br = (int(0.25*len(self.mic_canvas[0]) + len(self.ms_canvas)*ms_to_mic), int(0.25*len(self.mic_canvas) + len(self.ms_canvas[0])*ms_to_mic))
-
-        # get list of available cell images and their corresponding masks
-        
-
-        density = 0
-        i = 0 # counter for placement iterations
-        current_id = 1 # counter for current mask index
-        # loop to populate the canvas with cells until the desired cell density is reached or the maximum number of placement iterations is exceeded
-        while density < self.cell_density:
-            if i > self.max_cell_placement_iterations:
-                # print(f"aborted populating canvas. Too many cell placement cycles ({i})")
-                break
-            
-            i += 1
-            # choose random canvas coordinate to place the cell
-            x = random.randint(0, len(self.mic_canvas[0]))
-            y = random.randint(0, len(self.mic_canvas))
-            p = (x, y)
-            cell_type = random.choices(self.cell_types, weights=[ct.population for ct in self.cell_types], k=1)[0]
-            cell, mask, current_mask_index = self.load_random_cell(cell_type.get_directory(), mask_index=current_id)
-            # prevent cell images to violate canvas border
-            p_top_left = (int(p[0] - cell.shape[1] // 2), int(p[1] - cell.shape[0] // 2))
-            p_bottom_right = (int(p[0] + cell.shape[1] // 2), int(p[1] + cell.shape[0] // 2))
-            if (p_top_left[0] > 0) & (p_top_left[1] > 0) & (p_bottom_right[0] < len(self.mic_canvas[0])) & (p_bottom_right[1] < len(self.mic_canvas)):
-                canvas_area = self.mask_canvas[p_top_left[1]:p_top_left[1]+len(
-                    mask), p_top_left[0]:p_top_left[0]+len(mask[0])]
-                if not np.any(np.logical_and(canvas_area, mask)):
-                    # draw cell on mic_canvas; += prevents the background to override existing cells
-                    self.mic_canvas[p_top_left[1]:p_top_left[1]+len(cell), p_top_left[0]:(
-                        p_top_left[0]+len(cell[0])), 1] += cell[:, :, 0]
-                    self.mic_canvas[p_top_left[1]:p_top_left[1]+len(
-                        cell), p_top_left[0]:p_top_left[0]+len(cell[0]), 2] += cell[:, :, 1]
-                    self.mask_canvas[p_top_left[1]:p_top_left[1] +
-                                        len(mask), p_top_left[0]:p_top_left[0]+len(mask[0])] += mask
-                    
-                    for cell_id in range(current_id, current_mask_index+1):
-                        # store the mic x,y coordinates
-                        self.mic_coordinates[cell_id] = (x, y)
-                    density = self.calculate_cell_density()
-                    # add msi data
-                    if (p_top_left[0] > 0.25 * len(self.mic_canvas[0])) & (p_top_left[0] < 0.75 * len(self.mic_canvas[0])) & (p_top_left[1] > 0.25 * len(self.mic_canvas)) & (p_top_left[1] < 0.75 * len(self.mic_canvas)):
-                        # conversion to global ms coordinate system
-                        p_top_left_cell = np.array((
-                            p_top_left[0] - msi_tl[0],
-                            p_top_left[1] - msi_tl[1]
-                            ), dtype=np.uint16)
-                        p_bottom_right_cell = np.array((
-                            p_bottom_right[0] - msi_tl[0],
-                            p_bottom_right[1] - msi_tl[1]
-                            ), dtype=np.uint16)
-                        #print(f"Placing cell at mic coordinates {p} -> msi top-left {p_top_left_cell}, bottom-right {p_bottom_right_cell}")
-                        #print(f"Cell Coordinates TL: {p_top_left_cell}, BR: {p_bottom_right_cell}")
-                        #print(f"MSI coordinates {((p[0]-msi_tl[0]) * mic_to_ms, (p[1]-msi_tl[1]) * mic_to_ms)}")
-                        #print(f"Canvas sizes mic: {self.mic_canvas.shape}, msi: {self.ms_canvas.shape}, cell: {cell.shape}")
-                        p_ms = np.array((round(((p[0]) - msi_tl[0]) * mic_to_ms),
-                                round(((p[1]) - msi_tl[1]) * mic_to_ms)), dtype=np.uint16)
-                        for cell_id in range(current_id, current_mask_index+1):
-                            cell_mask = np.zeros((len(mask),len(mask[0])))
-                            mask_region = self.mask_canvas[p_top_left[1]:p_top_left[1] +
-                                        len(mask), p_top_left[0]:p_top_left[0]+len(mask[0])]
-                            cell_mask[mask_region == cell_id] = cell_id
-                            msi_cell, cell_intensities = self.generate_maldi_cell(cell_type,
-                                cell_mask, sigma=40)
-                            #print(f"Cell ID {cell_id} with intensities {cell_intensities}")
-                            if (p_top_left_cell[0] >= 0) & (p_top_left_cell[1] >= 0) & (p_bottom_right_cell[0] < len(self.cell_canvas[0])) & (p_bottom_right_cell[1] < len(self.cell_canvas)):
-                                for j in range(len(self.mass_list)):
-                                    # add cell intensity to ms canvas; += to add intensities of overlapping diffusion
-                                    self.cell_canvas[p_top_left_cell[1]:p_top_left_cell[1]+len(msi_cell), 
-                                        p_top_left_cell[0]:p_top_left_cell[0]+len(msi_cell[0]), j] += msi_cell[:,:,j]
-                                # store local ms coordinates
-                                self.msi_coordinates[cell_id] = (int(p_ms[0]), int(p_ms[1]))
-                                # store total msi cell intensity
-                                self.cell_intensities[cell_id] = cell_intensities
-                                self.cell_labels[cell_id] = cell_type.name
-            current_id = current_mask_index + 1
-        self.diffusion_canvas = np.zeros_like(self.cell_canvas)
-        h, w = self.mask_canvas.shape
-        self.diffusion_canvas = diffuse_mask_batched(
-            self.mask_canvas[h//4 : -h//4, w//4 : -w//4],
-            self.cell_canvas,
-            total_time=self.diffusion_total_time,
-            dt=self.diffusion_dt,
-            diffusion_coeff=self.diffusion_coeff,
-            target_max_area=self.diffusion_target_max_area,
-            smooth_window=self.diffusion_smooth_window,
-            min_boundary_points=self.diffusion_min_boundary_points,
-            barrier_alpha=self.diffusion_barrier_alpha,
-            leaky_outer_boundary=self.diffusion_leaky_outer_boundary
-        )
-        for i in range(len(self.mass_list)):
-            self.ms_canvas[:,:,i] = skimage.measure.block_reduce(self.diffusion_canvas[:,:,i], block_size=(int(ms_to_mic), int(ms_to_mic)), func=np.sum)
-
-        if self.plot or self.save_img:
-            f_mic_canvas = plt.figure()
-            f_mic_canvas.canvas.manager.set_window_title("Microscopy Canvas")
-            plt.imshow(self.mic_canvas[:,:])
-            plt.axis('off')
-            f_mask_canvas = plt.figure()
-            f_mask_canvas.canvas.manager.set_window_title("Ground Truth Mask Canvas")
-            masked_canvas = np.ma.masked_where(self.mask_canvas == 0, self.mask_canvas)
-            my_cmap = plt.cm.prism.copy()
-            my_cmap.set_bad(color='black')  # Set the color for masked values
-            plt.imshow(masked_canvas, cmap=my_cmap)
-            plt.axis('off')
-            f_cell_canvas = plt.figure()
-            f_cell_canvas.canvas.manager.set_window_title("MSI Canvas Origin Resolution")
-            plt.imshow(self.cell_canvas[:,:,0], vmax=np.percentile(self.cell_canvas[:,:,0], 99.), cmap='inferno')
-            plt.axis('off')
-            f_diffusion_canvas = plt.figure()
-            f_diffusion_canvas.canvas.manager.set_window_title("MSI Canvas After Diffusion")
-            plt.imshow(self.diffusion_canvas[:,:,0], vmax=np.percentile(self.diffusion_canvas[:,:,0], 99.), cmap='inferno')
-            plt.axis('off')
-            f_msi_canvas = plt.figure()
-            f_msi_canvas.canvas.manager.set_window_title("MSI Canvas Target Resolution")
-            plt.imshow(self.ms_canvas[:,:,0], vmax=np.percentile(self.ms_canvas[:,:,0], 99.), cmap='inferno')
-            plt.axis('off')
-            x_coords = []
-            y_coords = []
-            for key, item in self.msi_coordinates.items():
-                x_coords.append(item[0])
-                y_coords.append(item[1])
-            plt.scatter(x_coords, y_coords, color='red', s=10, marker='x')
-            if self.save_img:
-                f_mic_canvas.savefig(self.output + "/mic_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-                f_mask_canvas.savefig(self.output + "/mask_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-                f_cell_canvas.savefig(self.output + "/cell_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-                f_msi_canvas.savefig(self.output + "/ms_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-        self.canvas_metrics["n_cells"] = len(self.mic_coordinates)
-        self.canvas_metrics["n_msi_cells"] = len(self.cell_intensities)
+        # create & plot canvases in separate module
+        generate_and_plot_canvases(self)
 
         #print("perform pertubations...")
         self.maldi_canvas = np.zeros(self.ms_canvas.shape)
@@ -654,26 +518,39 @@ class Validator:
         maldi_sitk.SetSpacing((self.ms_spacing, self.ms_spacing))
 
         for i in range(len(self.mass_list)):
-            img = sitk.GetImageFromArray(self.ms_canvas[:,:,i])
+            img = sitk.GetImageFromArray(self.ms_canvas[:, :, i])
             img.SetSpacing((self.ms_spacing, self.ms_spacing))
             self.pertubation_transform_maldi, pertubated_img = self.pertubate_img(img)
-            self.maldi_canvas[:,:,i] = sitk.GetArrayFromImage(pertubated_img)
+            self.maldi_canvas[:, :, i] = sitk.GetArrayFromImage(pertubated_img)
             if self.texture == 'all':
-                self.maldi_canvas[:,:,i] = self.add_texture(self.maldi_canvas[:,:,i], self.texture_path)
+                self.maldi_canvas[:, :, i] = self.add_texture(
+                    self.maldi_canvas[:, :, i],
+                    self.texture_path
+                )
 
-        maldi_img = self.maldi_canvas[:,:,0]
+        maldi_img = self.maldi_canvas[:, :, 0]
         if self.texture == 'registration':
             maldi_img = self.add_texture(maldi_img, self.texture_path)
 
         if self.plot or self.save_img:
             fig = plt.figure()
-            plt.imshow(maldi_img, vmax=np.percentile(maldi_img, 99.), cmap='inferno')
-            #plt.title("Pertubated MS Canvas")
+            plt.imshow(
+                maldi_img,
+                vmax=np.percentile(maldi_img, 99.),
+                cmap='inferno'
+            )
             plt.axis('off')
             if self.save_img:
-                fig.savefig(self.output + "/pertubated_ms_canvas.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-        stop = time.perf_counter()
-        self.canvas_metrics['time'] = stop - start
+                fig.savefig(
+                    self.output + "/pertubated_ms_canvas.svg",
+                    bbox_inches='tight',
+                    pad_inches=0,
+                    dpi=600
+                )
+
+        # canvas_metrics["time"] was already set in generate_and_plot_canvases
+        # continue with registration / segmentation / spectra as before...
+
 
         #img = np.zeros((len(self.mic_canvas), len(self.mic_canvas[0]), 3))
         #maldi_scaled = skimage.transform.rescale(self.ms_canvas[:,:,0], ms_to_mic, order=0, anti_aliasing=False)
@@ -699,14 +576,19 @@ class Validator:
         moving_size = (maldi_sitk.GetSize()[0] * scaling_factor, maldi_sitk.GetSize()[1] * scaling_factor)
         moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkNearestNeighbor, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
 
-        mic_landmarks = [[msi_tl[0]*self.mic_spacing, msi_tl[1]*self.mic_spacing],
-                          [msi_tl[0]*self.mic_spacing, msi_br[1]*self.mic_spacing],
-                          [msi_br[0]*self.mic_spacing, msi_tl[1]*self.mic_spacing],
-                          [msi_br[0]*self.mic_spacing, msi_br[1]*self.mic_spacing]]
-        moving_landmarks = [[0.0, 0.0],
-                             [0.0, len(self.ms_canvas)*self.ms_spacing],
-                             [len(self.ms_canvas[0])*self.ms_spacing, 0.0],
-                             [len(self.ms_canvas[0])*self.ms_spacing, len(self.ms_canvas)*self.ms_spacing]]
+        mic_landmarks = [
+            [self.msi_tl[0] * self.mic_spacing, self.msi_tl[1] * self.mic_spacing],
+            [self.msi_tl[0] * self.mic_spacing, self.msi_br[1] * self.mic_spacing],
+            [self.msi_br[0] * self.mic_spacing, self.msi_tl[1] * self.mic_spacing],
+            [self.msi_br[0] * self.mic_spacing, self.msi_br[1] * self.mic_spacing],
+        ]
+        moving_landmarks = [
+            [0.0, 0.0],
+            [0.0, len(self.ms_canvas) * self.ms_spacing],
+            [len(self.ms_canvas[0]) * self.ms_spacing, 0.0],
+            [len(self.ms_canvas[0]) * self.ms_spacing, len(self.ms_canvas) * self.ms_spacing],
+        ]
+
         center = np.array(self.ms_canvas.shape[:2], dtype=float)/2
 
         center = center * self.ms_spacing
@@ -944,7 +826,8 @@ class Validator:
             spectra_comparison = []
             for key, value in self.msi_coordinates.items():
                 x_msi, y_msi = value
-                x_global, y_global = x_msi * self.ms_spacing + msi_tl[0] * self.mic_spacing, y_msi * self.ms_spacing + msi_tl[1] * self.mic_spacing
+                x_global = x_msi * self.ms_spacing + self.msi_tl[0] * self.mic_spacing
+                y_global = y_msi * self.ms_spacing + self.msi_tl[1] * self.mic_spacing
                 x_pertubated, y_pertubated = self.final_transform.TransformPoint((x_global, y_global))
                 x = x_pertubated / self.ms_spacing
                 y = y_pertubated / self.ms_spacing
