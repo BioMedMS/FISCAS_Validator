@@ -7,6 +7,10 @@ import matplotlib.patches as patches
 from PIL import Image
 import random
 import skimage
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics.cluster import contingency_matrix 
+from sklearn.metrics import adjusted_rand_score
 import cv2
 from math import radians, cos, sin
 import SimpleITK as sitk
@@ -16,6 +20,9 @@ import copy
 import time
 from scipy.optimize import linear_sum_assignment
 import pickle 
+from sklearn.decomposition import PCA
+
+
 
 from canvas_generation import generate_and_plot_canvases
 from diffusion import diffuse_mask_batched
@@ -23,8 +30,7 @@ from diffusion import diffuse_mask_batched
 
 class Validator:
     def __init__(self,
-        cell_types, # define cell populations with CellType objects
-        path_sample_cells="./Cell_images/microscopy/HuTu80",
+        cell_types, # define cell populations with CellType objects,
         output="./output",
         allow_multiplets=True, # allow placement of cell clusters
         use_perfect_registration=False, # skip registration by using the inverse of perturbation transform
@@ -38,7 +44,6 @@ class Validator:
         rotation=0,  # in degree
         scale=1.0,
         mass_list=[577.5, 760.68], # list of m/z values to simulate
-        diffusion=0,  # in µm
         noise_loc=0.0,  # mean of noise level; default 0.1
         noise_scale=0.0,  # spread of noise level; default 0.2
         seed=0, # random seed for reproducibility
@@ -60,7 +65,6 @@ class Validator:
         diffusion_leaky_outer_boundary=False):  
         
         self.cell_types = cell_types
-        self.path_sample_cells = path_sample_cells
         self.output = output
         self.allow_multiplets = allow_multiplets
         self.use_perfect_registration = use_perfect_registration
@@ -74,7 +78,6 @@ class Validator:
         self.rotation = rotation
         self.scale = scale
         self.mass_list = mass_list
-        self.diffusion = diffusion
         self.noise_loc = noise_loc
         self.noise_scale = noise_scale
         self.seed = seed
@@ -89,6 +92,8 @@ class Validator:
         self.mic_coordinates = {}
         self.msi_coordinates = {}
         self.cell_intensities = {}
+        self.cell_labels = {}
+        self.cluster_metrics = {}
         self.render_animation = render_animation
         self.texture = texture
         self.texture_path = texture_path
@@ -102,6 +107,31 @@ class Validator:
         self.diffusion_barrier_alpha=diffusion_barrier_alpha
         self.diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary
         plt.rcParams.update({'figure.max_open_warning': 0})
+
+        if self.plot or self.save_img:
+            n = len(self.mass_list)
+            c = int(np.ceil(np.sqrt(n)))
+            fig, ax = plt.subplots(c, c) # ToDo Adjust plot for len(mass_list) > 4
+            k = 0
+            colors = ["red", "black", "blue", "green", "orange", "purple", "brown", "pink"]
+            for mz in mass_list:
+                for c, cell_type in enumerate(self.cell_types):
+                    try:
+                        m = cell_type.parameters[mz][1]
+                        s = cell_type.parameters[mz][2]
+                        x = np.linspace(m - 4*s, m + 4*s, 100)
+                        if cell_type.parameters[mz][0] == "normal":
+                            y = (1 / (s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - m) / s) ** 2)
+                        if cell_type.parameters[mz][0] == "uniform":
+                            y = np.where((x >= m - s) & (x <= m + s), 1/(2*s), 0)
+                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - {mz} (μ={m}, σ={s})", color=colors[c])
+                        ax[k//2, k%2].legend(loc='lower center', bbox_to_anchor=(0.5, 1), ncol=1)
+                    except Exception as e:
+                        continue
+                k += 1
+            plt.tight_layout()
+            if self.save_img:
+                plt.savefig(self.output + "/cell_type_distributions.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         return None
 
     # function to return dict with settings for report generation with quarto
@@ -111,7 +141,6 @@ class Validator:
             cell_types.append(i.name)
         settings = {
             "cell_types": cell_types,
-            "path_sample_cells": self.path_sample_cells,
             "output": self.output,
             "allow_multiplets": self.allow_multiplets,
             "use_perfect_registration": self.use_perfect_registration,
@@ -125,7 +154,6 @@ class Validator:
             "rotation": self.rotation,
             "scale": self.scale,
             "mass_list": self.mass_list,
-            "diffusion": self.diffusion,
             "noise_loc": self.noise_loc,
             "noise_scale": self.noise_scale,
             "seed": self.seed,
@@ -150,14 +178,19 @@ class Validator:
 
     # loads random cell images and their corresponding masks from folder with prepared cell images and applies random rotation and scale
     # returns randomized cell image with its corresponding mask
-    def load_random_cell(self, mask_index=255, seed=None):
+    def load_random_cell(self, cell_directory, mask_index=255, seed=None):
+        all_images = glob.glob(os.path.join(cell_directory, '**', '*.*'), recursive=True)
+        images = sorted([
+            file for file in all_images if 'cell' in os.path.basename(file) and 'mask' not in os.path.basename(file)])
+        masks = sorted([
+            file for file in all_images if 'mask' in os.path.basename(file)])
         if seed is None:
             angle = random.randint(0, 360)
             scaling_factor = random.uniform(0.8, 1.2)
             while True:
-                cell_chosen = random.randint(0, len(self.cell_image_paths)-1)
+                cell_chosen = random.randint(0, len(images)-1)
                 #check if there is more than one cell on the chosen image
-                is_multiplet = "doublet" in self.cell_masks_paths[cell_chosen] or "triplet" in self.cell_masks_paths[cell_chosen] or "multiplet" in self.cell_masks_paths[cell_chosen]
+                is_multiplet = "doublet" in masks[cell_chosen] or "triplet" in masks[cell_chosen] or "multiplet" in masks[cell_chosen]
                 if is_multiplet and not self.allow_multiplets:
                     continue  # Retry if the cell is a multiplet and multiplets are not allowed
                 else:
@@ -166,7 +199,7 @@ class Validator:
             angle = 0
             scaling_factor = 1
             cell_chosen = seed
-        cell_mask = np.array(Image.open(self.cell_masks_paths[cell_chosen]), dtype=np.uint16) # open corresponding cell mask
+        cell_mask = np.array(Image.open(masks[cell_chosen]), dtype=np.uint16) # open corresponding cell mask
         if is_multiplet: # if cell image contains multiple cells, reindex mask ids to match the current running number already placed on canvas
             mask_ids = np.unique(cell_mask)
             for mask_id in mask_ids:
@@ -177,7 +210,7 @@ class Validator:
         else:
             cell_mask[cell_mask > 0] = mask_index
         current_mask_index = mask_index
-        with Image.open(self.cell_image_paths[cell_chosen]) as img: 
+        with Image.open(images[cell_chosen]) as img: 
             cell_image = np.zeros((img.size[1], img.size[0], img.n_frames))
             for i in range(img.n_frames):
                 img.seek(i)
@@ -190,22 +223,10 @@ class Validator:
         return cell_scaled, mask_scaled.astype(np.uint16), current_mask_index
 
 
-    # apply diffusion on cell mask
-    def diffuse_mask(self, mask, diffusion):
-        mask_idx = np.max(mask)
-        mask[mask > 0] = 255
-        r = int(self.diffusion / self.mic_spacing)
-        if r < 1:
-            return mask
-        kernel = np.fromfunction(lambda x, y: ((x-r)**2 + (y-r)**2 <= r**2)*1, (2*r+1, 2*r+1), dtype=int).astype(np.uint8)
-        dil_sample = cv2.dilate(np.float32(mask), kernel, iterations = 1)
-        dil_sample = (dil_sample/np.max(dil_sample) * mask_idx).astype(np.uint16)
-        return dil_sample
-
 
 
     # generate MALDI signal distribution for a given cell mask
-    def generate_maldi_cell(self, mask, sigma=4.0):
+    def generate_maldi_cell(self, cell_type, mask, sigma=4.0):
         mask = copy.deepcopy(mask)
         coords = np.argwhere(mask > 0)
         center_of_mass = coords.mean(axis=0)
@@ -218,7 +239,7 @@ class Validator:
             intensities[x, y] = np.exp(-(distance / sigma)**2) + 0.1
         
         # draw intensity based on cell type distribution
-        cell = random.choices(self.cell_types, weights=[ct.population for ct in self.cell_types], k=1)[0]
+        cell = cell_type
         for i in range(len(self.mass_list)):
             factor = cell.get_intensity(self.mass_list[i])
             if np.sum(intensities) > 0:
@@ -277,9 +298,9 @@ class Validator:
         pertubation_transform.AddTransform(rotation_transform)
         pertubation_transform.AddTransform(scaling_transform)
         if inverse == True:
-            transformed_image = sitk.Resample(img, img, pertubation_transform.GetInverse(), sitk.sitkLinear, 0.0, img.GetPixelID())
+            transformed_image = sitk.Resample(img, img, pertubation_transform.GetInverse(), sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
         else:
-            transformed_image = sitk.Resample(img, img, pertubation_transform, sitk.sitkLinear, 0.0, img.GetPixelID())
+            transformed_image = sitk.Resample(img, img, pertubation_transform, sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
         if not isinstance(image, sitk.Image):
             return pertubation_transform, sitk.GetArrayFromImage(transformed_image)
         else:
@@ -553,7 +574,7 @@ class Validator:
         scaling_factor = int(maldi_sitk.GetSpacing()[0] / mic_sitk.GetSpacing()[0])
         self.moving_spacing = maldi_sitk.GetSpacing()[0] / scaling_factor
         moving_size = (maldi_sitk.GetSize()[0] * scaling_factor, maldi_sitk.GetSize()[1] * scaling_factor)
-        moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkLinear, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
+        moving_sitk = sitk.Resample(maldi_sitk, moving_size, interpolator=sitk.sitkNearestNeighbor, outputOrigin=(0.0, 0.0), outputSpacing=(self.moving_spacing, self.moving_spacing))
 
         mic_landmarks = [
             [self.msi_tl[0] * self.mic_spacing, self.msi_tl[1] * self.mic_spacing],
@@ -599,7 +620,7 @@ class Validator:
             landmark_registration_sitk = sitk.Resample(moving_sitk,
                                          mic_sitk,
                                          landmark_affine_transform,
-                                         sitk.sitkLinear,
+                                         sitk.sitkNearestNeighbor,
                                          0.0,
                                          moving_sitk.GetPixelID()
                                          )
@@ -827,7 +848,7 @@ class Validator:
                         spectra_comparison.append((true_int-meas_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 else:
                     mask_id = 0
                     canvas_to_mask[key] = mask_id
@@ -838,7 +859,7 @@ class Validator:
                         spectra_comparison.append((true_int-meas_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 
             
             spectra_comparison = np.array(spectra_comparison) * 100
@@ -853,11 +874,40 @@ class Validator:
             spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
             cells_missed_all_mz.append(np.sum(spectra_comparison==100))
 
+        spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
+        np.save(self.output + "/true_spectra.npy", spectra)
+        standardized_spectra = StandardScaler().fit_transform(spectra)
+        np.save(self.output + "/standardized_spectra.npy", standardized_spectra)
+        np.save(self.output + "/cell_labels.npy", np.array(list(self.cell_labels.values())))
+        kmeans = KMeans(n_clusters=len(self.cell_types), random_state=self.seed)
+        predicted_labels = kmeans.fit_predict(standardized_spectra)
+        true_labels = np.array(list(self.cell_labels.values()))
+        adjusted_rand = adjusted_rand_score(true_labels, predicted_labels)
+        cont_matrix = contingency_matrix(true_labels, predicted_labels)
+        self.cluster_metrics["contingency_matrix"] = cont_matrix
+        self.cluster_metrics["adjusted_rand_index"] = adjusted_rand
+        self.cluster_metrics["true_labels"] = true_labels
+        self.cluster_metrics["predicted_labels"] = predicted_labels
+        print(cont_matrix)
+        print(f"Adjusted Rand Index: {adjusted_rand:.4f}")
+
+        if self.plot or self.save_img:
+            pca = PCA(n_components=2)
+            pca_result = pca.fit_transform(standardized_spectra)
+            unique_labels, true_labels_int = np.unique(true_labels, return_inverse=True)
+            plt.figure(figsize=(8,6))
+            scatter = plt.scatter(pca_result[:, 0], pca_result[:, 1], c=true_labels_int, cmap='prism', alpha=0.7, linewidth=1.5)
+            handles, _ = scatter.legend_elements()
+            plt.xlabel('PC1')
+            plt.ylabel('PC2')
+            plt.title('PCA of Standardized Spectra')
+            plt.legend(handles, unique_labels, title="True Label")
+            if self.save_img:
+                plt.savefig(self.output + "/pca.svg", bbox_inches='tight', pad_inches=0, dpi=600)
+
+
         fpr = np.sum(deviation, axis=1) / (np.sum(cells, axis=1) + np.sum(deviation, axis=1)) * 100
         fpr = np.nan_to_num(fpr, 0)
-        print(fpr.shape)
-        print(np.max(fpr))
-        print(f"FPR per cell: {fpr}")
         if self.plot or self.save_img:
             plt.figure()
             plt.hist(fpr, bins=100)
@@ -886,8 +936,11 @@ class Validator:
             pickle.dump(self.cell_intensities, f)
         with open('cells.pkl', 'wb') as f:
             pickle.dump(cells, f)
+        with open('cell_labels.pkl', 'wb') as f:
+            pickle.dump(self.cell_labels, f)
+            
         
-        return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics
+        return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics, self.cluster_metrics
 
 
 class CellType:
@@ -920,51 +973,60 @@ class CellType:
             intensity = np.abs(np.random.uniform(low=low, high=high))
         return intensity
 
-if __name__ == "__main__":
-    mass_list = [0,1,2,3]
-    seed = 2
-    random.seed(seed)
-    np.random.seed(seed)
-    parameters_A = {mass_list[0] : ["normal", 15, 1], 
-                    mass_list[1] : ["normal", 25, 5],
-                    mass_list[2] : ["normal", 15, 5],
-                    mass_list[3] : ["uniform", 0, 0]
-                    }
-    parameters_B = {mass_list[0] : ["normal", 15, 5], 
-                    mass_list[1] : ["uniform", 0, 0],
-                    mass_list[2] : ["normal", 25, 5],
-                    mass_list[3] : ["normal", 25, 1]
-                    }
 
-    A = CellType("A", parameters_A, 0.5)
-    B = CellType("B", parameters_B, 0.5)
+    def get_directory(self):
+        return self.parameters["path"]
 
-    valid = Validator(
-        use_perfect_segmentation=True, 
-        use_perfect_registration=True, 
-        allow_multiplets=True,
-        remove_ambiguous=False,
-        seed=9502, 
-        scale=1, 
-        teaching_imprecision=5, 
-        rotation=0, 
-        ms_spacing=5, 
-        plot=True, 
-        save_img=True, 
-        canvas_size=1000, 
-        cell_density=0.2, 
-        mass_list=mass_list,
-        cell_types = [A, B],
-        render_animation=False,
-        diffusion_total_time=300.0,
-        diffusion_dt=0.1,
-        diffusion_coeff=10,
-        diffusion_target_max_area=10.0,
-        diffusion_smooth_window=7,
-        diffusion_min_boundary_points=160,
-        diffusion_barrier_alpha=0.1,
-        diffusion_leaky_outer_boundary=True)#,
-        #texture='registration',
-        #texture_path="./textures/noise_150x150.jpg",
-        #texture_epsilon=0.5)
-    valid.main()
+
+mass_list = [0,1,2,3]
+seed = 2
+random.seed(seed)
+np.random.seed(seed)
+parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 15, 3],
+                mass_list[2] : ["normal", 15, 3],
+                mass_list[3] : ["uniform", 0, 0]
+                }
+parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 22, 3],
+                mass_list[2] : ["normal", 8, 3],
+                mass_list[3] : ["uniform", 0, 0]
+                }
+
+A = CellType("A", parameters_A, 0.5)
+B = CellType("B", parameters_B, 0.5)
+
+valid = Validator(
+    use_perfect_segmentation=True, 
+    use_perfect_registration=True, 
+    allow_multiplets=True,
+    remove_ambiguous=False,
+    seed=9502, 
+    scale=1, 
+    teaching_imprecision=5, 
+    rotation=5, 
+    ms_spacing=5, 
+    plot=True, 
+    save_img=True, 
+    canvas_size=1500, 
+    cell_density=0.2, 
+    mass_list=mass_list,
+    cell_types = [A, B],
+    render_animation=False,
+    diffusion_total_time=1.0,
+    diffusion_dt=0.1,
+    diffusion_coeff=3,
+    diffusion_target_max_area=10.0,
+    diffusion_smooth_window=7,
+    diffusion_min_boundary_points=160,
+    diffusion_barrier_alpha=0.5,
+    diffusion_leaky_outer_boundary=True,
+    texture='registration',
+    texture_path="./textures/noise_150x150.jpg",
+    texture_epsilon=0.5)
+
+a, b, c, d, e = valid.main()
+_ = valid.return_settings()
+#valid.main()

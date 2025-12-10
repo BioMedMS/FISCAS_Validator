@@ -5,7 +5,7 @@
 /reports
 /textures
 *test*.py
-test.ipynb
+*test*.ipynb
 *.pyc
 __pycache__/
 *.pkl
