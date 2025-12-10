@@ -134,7 +134,7 @@ display(HTML(html_table))
 #    display(HTML(cell_type_table.to_html(index=False)))
 ```
 
-![Cell Populations](./output/cell_type_distributions.svg){#fig-cell-populations}
+![Cell Populations](`{python} f"{output}/cell_type_distributions.svg"`){#fig-cell-populations}
 
 
 {{< pagebreak >}}
@@ -227,7 +227,7 @@ print(f"mean FPR is {spectra_metrics['FPR']:.2f}% \nSpectra compilation took {sp
 # Clustering
 
 
-![Principal Component Analysis](./output/pca.svg){#fig-pca}
+![Principal Component Analysis](`{python} f"{output}/pca.svg"`){#fig-pca}
 
 ```{python}
 print(f"Adjusted Rand index for KMeans Clustering: {cluster_metrics['adjusted_rand_index']}")

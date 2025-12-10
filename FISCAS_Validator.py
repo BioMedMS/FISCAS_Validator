@@ -475,6 +475,22 @@ class Validator:
         masks = [(label_image == label_id) for label_id in unique_labels]
         return masks
 
+
+    def add_texture(self, image, texture_path="./texture.jpg"):
+        if np.abs(self.texture_epsilon) > 1:
+            self.texture_epsilon /= np.abs(self.texture_epsilon)  # catch epsilon values outside of [-1, 1]
+        image = np.array(image)
+        texture = np.array(Image.open(texture_path))
+        if len(texture.shape) == 3:
+            texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
+        texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
+        texture = texture / np.max(texture) * self.texture_epsilon # Normalize texture and weight it by epsilon
+        intensity = np.percentile(image, 99)
+        texture = skimage.exposure.rescale_intensity(texture, in_range=(0,1), out_range=(0, intensity))
+        combined_image = np.zeros_like(image)
+        combined_image = texture + image
+        return combined_image
+
     def evaluate_segmentation(self, predictions, ground_truths, iou_threshold=0.5):
         # Edge cases: nothing to compare
         if len(predictions) == 0 and len(ground_truths) == 0:
@@ -1010,7 +1026,7 @@ valid = Validator(
     ms_spacing=5, 
     plot=True, 
     save_img=True, 
-    canvas_size=1500, 
+    canvas_size=1000, 
     cell_density=0.2, 
     mass_list=mass_list,
     cell_types = [A, B],

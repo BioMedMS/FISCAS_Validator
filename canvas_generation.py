@@ -1,11 +1,8 @@
 import numpy as np
-import glob
-import os
 import random
 import time
 import matplotlib.pyplot as plt
 import skimage
-from PIL import Image
 
 from diffusion import diffuse_mask_batched
 
@@ -59,19 +56,6 @@ def generate_and_plot_canvases(validator):
     validator.msi_tl = msi_tl
     validator.msi_br = msi_br
 
-    # get list of available cell images and their corresponding masks
-    all_images = glob.glob(
-        os.path.join(validator.path_sample_cells, '**', '*cell*'),
-        recursive=True
-    )
-    validator.cell_image_paths = sorted(
-        [file for file in all_images
-         if 'mask' not in os.path.basename(file)]
-    )
-    validator.cell_masks_paths = sorted(
-        [file for file in all_images
-         if 'mask' in os.path.basename(file)]
-    )
 
     density = 0.0
     i = 0  # counter for placement iterations
@@ -90,7 +74,9 @@ def generate_and_plot_canvases(validator):
         y = random.randint(0, len(validator.mic_canvas))
         p = (x, y)
 
-        cell, mask, current_mask_index = validator.load_random_cell(
+        cell_type = random.choices(validator.cell_types, weights=[ct.population for ct in validator.cell_types], k=1)[0]
+        
+        cell, mask, current_mask_index = validator.load_random_cell(cell_type.get_directory(),
             mask_index=current_id
         )
 
@@ -172,6 +158,7 @@ def generate_and_plot_canvases(validator):
                         ]
                         cell_mask[mask_region == cell_id] = cell_id
                         msi_cell, cell_intensities = validator.generate_maldi_cell(
+                            cell_type,
                             cell_mask,
                             sigma=40
                         )
@@ -195,6 +182,7 @@ def generate_and_plot_canvases(validator):
                             )
                             # store total msi cell intensity
                             validator.cell_intensities[cell_id] = cell_intensities
+                            validator.cell_labels[cell_id] = cell_type.name
 
         current_id = current_mask_index + 1
 
