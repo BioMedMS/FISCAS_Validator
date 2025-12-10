@@ -6,7 +6,6 @@
  format:
   pdf: default
 ---
-# Registration Report
 ```{python}
 #| output: False
 from FISCAS_Validator import Validator, CellType
@@ -27,21 +26,19 @@ def convert_to_float_and_round(value, decimal=4):
 
 ```{python}
 #| tags: [parameters]
-path_sample_cells=./Cell_images/microscopy/HuTu80/"
 output="./output/"
 allow_multiplets=True
-use_perfect_registration=False
+use_perfect_registration=True
 use_perfect_segmentation=True
 teaching_imprecision=10
-canvas_size=1500
+canvas_size=1250
 mic_spacing=0.325
 ms_spacing=5
-cell_density=0.3
+cell_density=0.2
 max_cell_placement_iterations=1000
-rotation=10
+rotation=1
 scale=1.00
 mass_list=[0, 1, 2, 3]
-diffusion=5
 noise_loc=0.0
 noise_scale=0.0
 seed=42
@@ -52,7 +49,7 @@ cell_diameter=120
 texture=None
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon=0.1
-diffusion_total_time=500.0
+diffusion_total_time=1.0
 diffusion_dt=0.1
 diffusion_coeff=1.0
 diffusion_target_max_area=10.0
@@ -60,6 +57,7 @@ diffusion_smooth_window=7
 diffusion_min_boundary_points=160
 diffusion_barrier_alpha=0.1
 diffusion_barrier_conserve=False
+diffusion_leaky_outer_boundary=True
 ```
 
 ```{python}
@@ -68,15 +66,17 @@ if seed == 0:
     seed = random.randint(1, 10000)
 random.seed(seed)
 np.random.seed(seed)
-parameters_A = {mass_list[0] : ["normal", 15, 1], 
-                mass_list[1] : ["normal", 25, 5],
-                mass_list[2] : ["normal", 15, 5],
+parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 15, 3],
+                mass_list[2] : ["normal", 15, 3],
                 mass_list[3] : ["uniform", 0, 0]
                 }
-parameters_B = {mass_list[0] : ["normal", 15, 1], 
-                mass_list[1] : ["uniform", 0, 0],
-                mass_list[2] : ["normal", 25, 5],
-                mass_list[3] : ["normal", 25, 1]
+parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 22, 3],
+                mass_list[2] : ["normal", 8, 3],
+                mass_list[3] : ["uniform", 0, 0]
                 }
 
 A = CellType("A", parameters_A, 0.5)
@@ -84,64 +84,65 @@ B = CellType("B", parameters_B, 0.5)
 
 cell_types=[A,B]
 
-A = Validator(path_sample_cells=path_sample_cells,
-output=output,
-allow_multiplets=allow_multiplets,
-use_perfect_registration=use_perfect_registration,
-use_perfect_segmentation=use_perfect_segmentation,
-teaching_imprecision=teaching_imprecision,
-canvas_size=canvas_size,
-mic_spacing=mic_spacing,
-ms_spacing=ms_spacing,
-cell_density=cell_density,
-max_cell_placement_iterations=max_cell_placement_iterations,
-rotation=rotation,
-scale=scale,
-mass_list=mass_list,
-diffusion=diffusion,
-noise_loc=noise_loc,
-noise_scale=noise_scale,
-seed=seed,
-plot=plot,
-save_img=save_img,
-remove_ambiguous=remove_ambiguous,
-cell_diameter=cell_diameter,
-texture=texture,
-texture_path=texture_path,
-cell_types=cell_types,
-diffusion_total_time=diffusion_total_time,
-diffusion_dt=diffusion_dt,
-diffusion_coeff=diffusion_coeff,
-diffusion_target_max_area=diffusion_target_max_area,
-diffusion_smooth_window=diffusion_smooth_window,
-diffusion_min_boundary_points=diffusion_min_boundary_points,
-diffusion_barrier_alpha=diffusion_barrier_alpha,
-diffusion_barrier_conserve=diffusion_barrier_conserve)
-canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics = A.main()
+A = Validator(
+    use_perfect_segmentation=use_perfect_segmentation, 
+    use_perfect_registration=use_perfect_registration, 
+    allow_multiplets=allow_multiplets,
+    remove_ambiguous=remove_ambiguous,
+    seed=seed, 
+    scale=scale, 
+    teaching_imprecision=teaching_imprecision, 
+    rotation=rotation, 
+    ms_spacing=ms_spacing, 
+    plot=plot, 
+    save_img=save_img, 
+    canvas_size=canvas_size, 
+    cell_density=cell_density, 
+    mass_list=mass_list,
+    cell_types = cell_types,
+    diffusion_total_time=diffusion_total_time,
+    diffusion_dt=diffusion_dt,
+    diffusion_coeff=diffusion_coeff,
+    diffusion_target_max_area=diffusion_target_max_area,
+    diffusion_smooth_window=diffusion_smooth_window,
+    diffusion_min_boundary_points=diffusion_min_boundary_points,
+    diffusion_barrier_alpha=diffusion_barrier_alpha,
+    diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary,
+    texture=texture,
+    texture_path=texture_path,
+    texture_epsilon=texture_epsilon)
+canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
 mass_list = A.mass_list
 filename = f"./output/spectra_hist_{mass_list[0]}.svg"
 ```
 
-## Settings
+# Settings
+
 ```{python}
 settings = A.return_settings()
 html_table = pd.DataFrame(list(settings.items()), columns=['Key', 'Value']).to_html(index=False)
 display(HTML(html_table))
 
-cell_types = A.cell_types
-for cell_type in cell_types:
-    name = cell_type.name
-    population = cell_type.population
-    parameters = cell_type.parameters
-    cell_type_table = pd.DataFrame(parameters.values(), columns=["distribution", "location", "scale"])
-    cell_type_table.insert(0, "m/z", A.mass_list)
-    print(f"Cell Type {name} makes up {population*100}% of the total cell population")
-    display(HTML(cell_type_table.to_html(index=False)))
+#cell_types = A.cell_types
+#for cell_type in cell_types:
+#    name = cell_type.name
+#    population = cell_type.population
+#    parameters = cell_type.parameters
+#    cell_type_table = pd.DataFrame(list(parameters.values())[1:], columns=["distribution", "location", "scale"])
+#    cell_type_table.insert(0, "m/z", A.mass_list)
+#    print(f"Cell Type {name} makes up {population*100}% of the total cell population")
+#    display(HTML(cell_type_table.to_html(index=False)))
 ```
 
-## Generated Canvas
+![Cell Populations](./output/cell_type_distributions.svg){#fig-cell-populations}
 
-::: {layout="[[45,-10,45], [45,-10,45]]"}
+
+{{< pagebreak >}}
+
+# Generated Canvas
+
+::: {layout="[[40,-10,40], [40,-10,40]]"}
+
 
 ![Microscopy Canvas](./output/mic_canvas.svg){#fig-mic_canvas}
 
@@ -151,6 +152,8 @@ for cell_type in cell_types:
 
 ![Pertubated MSI Canvas](./output/pertubated_ms_canvas.svg){#fig-pertubated_ms_canvas}
 
+:::
+
 ```{python}
 df = pd.DataFrame(list(canvas_metrics.items()), columns=['Key', 'Value'])
 #df['Value'] = df['Value'].apply(convert_to_float_and_round)
@@ -158,8 +161,9 @@ html_table = df.to_html(index=False)
 display(HTML(html_table))
 ```
 
-:::
-## Registration
+{{< pagebreak >}}
+
+# Registration
 
 ::: {layout="[[45,-10,45]]"}
 
@@ -175,7 +179,11 @@ df['Value'] = df['Value'].apply(convert_to_float_and_round)
 html_table = df.to_html(index=False)
 display(HTML(html_table))
 ```
-## Segmentation
+
+
+{{< pagebreak >}}
+
+# Segmentation
 
 ::: {layout="[[45,-10,45]]"}
 
@@ -189,7 +197,11 @@ display(HTML(html_table))
 ```
 
 :::
-## Spectra Compilation
+
+{{< pagebreak >}}
+
+# Spectra Compilation
+
 
 ::: {layout="[[45,-10,45],[100]]"}
 
@@ -209,3 +221,17 @@ display(HTML(html_table))
 print(f"mean FPR is {spectra_metrics['FPR']:.2f}% \nSpectra compilation took {spectra_metrics['time']} s")
 ```
 :::
+
+{{< pagebreak >}}
+
+# Clustering
+
+
+![Principal Component Analysis](./output/pca.svg){#fig-pca}
+
+```{python}
+print(f"Adjusted Rand index for KMeans Clustering: {cluster_metrics['adjusted_rand_index']}")
+print("Contingency Matrix")
+df = pd.DataFrame(cluster_metrics["contingency_matrix"])
+display(HTML(df.to_html(index=False)))
+```

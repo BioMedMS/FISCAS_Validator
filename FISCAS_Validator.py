@@ -41,7 +41,6 @@ class Validator:
         rotation=0,  # in degree
         scale=1.0,
         mass_list=[577.5, 760.68], # list of m/z values to simulate
-        diffusion=0,  # in µm
         noise_loc=0.0,  # mean of noise level; default 0.1
         noise_scale=0.0,  # spread of noise level; default 0.2
         seed=0, # random seed for reproducibility
@@ -76,7 +75,6 @@ class Validator:
         self.rotation = rotation
         self.scale = scale
         self.mass_list = mass_list
-        self.diffusion = diffusion
         self.noise_loc = noise_loc
         self.noise_scale = noise_scale
         self.seed = seed
@@ -92,6 +90,7 @@ class Validator:
         self.msi_coordinates = {}
         self.cell_intensities = {}
         self.cell_labels = {}
+        self.cluster_metrics = {}
         self.render_animation = render_animation
         self.texture = texture
         self.texture_path = texture_path
@@ -106,7 +105,7 @@ class Validator:
         self.diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary
         plt.rcParams.update({'figure.max_open_warning': 0})
 
-        if self.plot:
+        if self.plot or self.save_img:
             n = len(self.mass_list)
             c = int(np.ceil(np.sqrt(n)))
             fig, ax = plt.subplots(c, c) # ToDo Adjust plot for len(mass_list) > 4
@@ -115,24 +114,21 @@ class Validator:
             for mz in mass_list:
                 for c, cell_type in enumerate(self.cell_types):
                     try:
+                        m = cell_type.parameters[mz][1]
+                        s = cell_type.parameters[mz][2]
+                        x = np.linspace(m - 4*s, m + 4*s, 100)
                         if cell_type.parameters[mz][0] == "normal":
-                            m = cell_type.parameters[mz][1]
-                            s = cell_type.parameters[mz][2]
-                            x = np.linspace(m - 4*s, m + 4*s, 100)
                             y = (1 / (s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - m) / s) ** 2)
-                            ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - {mz} (μ={m}, σ={s})", color=colors[c])
-                            ax[k//2,k%2].legend()
                         if cell_type.parameters[mz][0] == "uniform":
-                            m = cell_type.parameters[mz][1]
-                            s = cell_type.parameters[mz][2]
-                            x = np.linspace(m - 4*s, m + 4*s, 100)
                             y = np.where((x >= m - s) & (x <= m + s), 1/(2*s), 0)
-                            ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - {mz} (μ={m}, σ={s})", color=colors[c])
-                            ax[k//2,k%2].legend()
+                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - {mz} (μ={m}, σ={s})", color=colors[c])
+                        ax[k//2, k%2].legend(loc='lower center', bbox_to_anchor=(0.5, 1), ncol=1)
                     except Exception as e:
                         continue
                 k += 1
-                
+            plt.tight_layout()
+            if self.save_img:
+                plt.savefig(self.output + "/cell_type_distributions.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         return None
 
     # function to return dict with settings for report generation with quarto
@@ -142,7 +138,6 @@ class Validator:
             cell_types.append(i.name)
         settings = {
             "cell_types": cell_types,
-            "path_sample_cells": self.path_sample_cells,
             "output": self.output,
             "allow_multiplets": self.allow_multiplets,
             "use_perfect_registration": self.use_perfect_registration,
@@ -156,7 +151,6 @@ class Validator:
             "rotation": self.rotation,
             "scale": self.scale,
             "mass_list": self.mass_list,
-            "diffusion": self.diffusion,
             "noise_loc": self.noise_loc,
             "noise_scale": self.noise_scale,
             "seed": self.seed,
@@ -173,8 +167,7 @@ class Validator:
             "diffusion_target_max_area": self.diffusion_target_max_area,
             "diffusion_smooth_window": self.diffusion_smooth_window,
             "diffusion_min_boundary_points": self.diffusion_min_boundary_points,
-            "diffusion_barrier_alpha": self.diffusion_barrier_alpha,
-            "diffusion_barrier_conserve": self.diffusion_barrier_conserve   
+            "diffusion_barrier_alpha": self.diffusion_barrier_alpha
         }
         return settings
 
@@ -225,18 +218,6 @@ class Validator:
         cell_scaled[mask_scaled == 0] = 0
         return cell_scaled, mask_scaled.astype(np.uint16), current_mask_index
 
-
-    # apply diffusion on cell mask
-    def diffuse_mask(self, mask, diffusion):
-        mask_idx = np.max(mask)
-        mask[mask > 0] = 255
-        r = int(self.diffusion / self.mic_spacing)
-        if r < 1:
-            return mask
-        kernel = np.fromfunction(lambda x, y: ((x-r)**2 + (y-r)**2 <= r**2)*1, (2*r+1, 2*r+1), dtype=int).astype(np.uint8)
-        dil_sample = cv2.dilate(np.float32(mask), kernel, iterations = 1)
-        dil_sample = (dil_sample/np.max(dil_sample) * mask_idx).astype(np.uint16)
-        return dil_sample
 
 
 
@@ -1020,15 +1001,17 @@ class Validator:
         true_labels = np.array(list(self.cell_labels.values()))
         adjusted_rand = adjusted_rand_score(true_labels, predicted_labels)
         cont_matrix = contingency_matrix(true_labels, predicted_labels)
+        self.cluster_metrics["contingency_matrix"] = cont_matrix
+        self.cluster_metrics["adjusted_rand_index"] = adjusted_rand
+        self.cluster_metrics["true_labels"] = true_labels
+        self.cluster_metrics["predicted_labels"] = predicted_labels
         print(cont_matrix)
         print(f"Adjusted Rand Index: {adjusted_rand:.4f}")
 
         if self.plot or self.save_img:
             pca = PCA(n_components=2)
             pca_result = pca.fit_transform(standardized_spectra)
-            # encode true_labels to integers (0..n_unique-1) without overwriting the original array
             unique_labels, true_labels_int = np.unique(true_labels, return_inverse=True)
-            print(f"{len(unique_labels)} unique labels -> mapping: {dict(enumerate(unique_labels))}")
             plt.figure(figsize=(8,6))
             scatter = plt.scatter(pca_result[:, 0], pca_result[:, 1], c=true_labels_int, cmap='prism', alpha=0.7, linewidth=1.5)
             handles, _ = scatter.legend_elements()
@@ -1036,16 +1019,12 @@ class Validator:
             plt.ylabel('PC2')
             plt.title('PCA of Standardized Spectra')
             plt.legend(handles, unique_labels, title="True Label")
-            plt.show()
             if self.save_img:
                 plt.savefig(self.output + "/pca.svg", bbox_inches='tight', pad_inches=0, dpi=600)
 
 
         fpr = np.sum(deviation, axis=1) / (np.sum(cells, axis=1) + np.sum(deviation, axis=1)) * 100
         fpr = np.nan_to_num(fpr, 0)
-        print(fpr.shape)
-        print(np.max(fpr))
-        print(f"FPR per cell: {fpr}")
         if self.plot or self.save_img:
             plt.figure()
             plt.hist(fpr, bins=100)
@@ -1078,7 +1057,7 @@ class Validator:
             pickle.dump(self.cell_labels, f)
             
         
-        return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics
+        return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics, self.cluster_metrics
 
 
 class CellType:
@@ -1164,4 +1143,7 @@ valid = Validator(
     texture='registration',
     texture_path="./textures/noise_150x150.jpg",
     texture_epsilon=0.5)
-valid.main()
+
+a, b, c, d, e = valid.main()
+_ = valid.return_settings()
+#valid.main()
