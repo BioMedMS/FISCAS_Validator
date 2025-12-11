@@ -7,6 +7,38 @@ import skimage
 from diffusion import diffuse_mask_batched
 
 
+def slide_cell_until_free(mask, mask_canvas, p_top_left):
+    h_cell, w_cell = mask.shape
+    H_canvas, W_canvas = mask_canvas.shape
+
+    directions = [
+        (1, 0),
+        (-1, 0),
+        (0, 1),
+        (0, -1),
+    ]
+    dx, dy = random.choice(directions)
+
+    x0, y0 = p_top_left
+
+    while True:
+        new_x0 = x0 + dx
+        new_y0 = y0 + dy
+        new_x1 = new_x0 + w_cell
+        new_y1 = new_y0 + h_cell
+
+        if (new_x0 <= 0 or new_y0 <= 0 or
+                new_x1 >= W_canvas or new_y1 >= H_canvas):
+            return False, p_top_left
+
+        canvas_area = mask_canvas[new_y0:new_y1, new_x0:new_x1]
+
+        if not np.any(np.logical_and(canvas_area, mask)):
+            return True, (new_x0, new_y0)
+
+        x0, y0 = new_x0, new_y0
+
+
 def generate_and_plot_canvases(validator):
     """
     Populate microscopy / MSI canvases, run diffusion, and (optionally) plot & save them.
@@ -99,6 +131,35 @@ def generate_and_plot_canvases(validator):
                 p_top_left[1]:p_top_left[1] + len(mask),
                 p_top_left[0]:p_top_left[0] + len(mask[0])
             ]
+
+            overlap = np.any(np.logical_and(canvas_area, mask))
+
+            if overlap:
+                success, new_p_top_left = slide_cell_until_free(
+                    mask,
+                    validator.mask_canvas,
+                    p_top_left
+                )
+
+                if not success:
+                    current_id = current_mask_index + 1
+                    continue
+
+                p_top_left = (
+                    int(new_p_top_left[0]),
+                    int(new_p_top_left[1])
+                )
+                p_bottom_right = (
+                    p_top_left[0] + cell.shape[1],
+                    p_top_left[1] + cell.shape[0]
+                )
+                canvas_area = validator.mask_canvas[
+                    p_top_left[1]:p_top_left[1] + len(mask),
+                    p_top_left[0]:p_top_left[0] + len(mask[0])
+                ]
+                x = p_top_left[0] + cell.shape[1] // 2
+                y = p_top_left[1] + cell.shape[0] // 2
+                p = (x, y)
 
             if not np.any(np.logical_and(canvas_area, mask)):
                 # draw cell on mic_canvas; += prevents the background to override existing cells
