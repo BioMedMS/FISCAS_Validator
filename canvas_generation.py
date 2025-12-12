@@ -271,12 +271,12 @@ def generate_and_plot_canvases(validator):
 
     # plotting canvases if requested
     if validator.plot or validator.save_img:
-        f_mic_canvas = plt.figure()
+        f_mic_canvas = plt.figure(figsize=(6,6))
         f_mic_canvas.canvas.manager.set_window_title("Microscopy Canvas")
         plt.imshow(validator.mic_canvas[:, :])
         plt.axis('off')
 
-        f_mask_canvas = plt.figure()
+        f_mask_canvas = plt.figure(figsize=(6,6))
         f_mask_canvas.canvas.manager.set_window_title("Ground Truth Mask Canvas")
         masked_canvas = np.ma.masked_where(
             validator.mask_canvas == 0,
@@ -287,7 +287,7 @@ def generate_and_plot_canvases(validator):
         plt.imshow(masked_canvas, cmap=my_cmap)
         plt.axis('off')
 
-        f_cell_canvas = plt.figure()
+        f_cell_canvas = plt.figure(figsize=(6,6))
         f_cell_canvas.canvas.manager.set_window_title("MSI Canvas Origin Resolution")
         plt.imshow(
             validator.cell_canvas[:, :, 0],
@@ -296,7 +296,7 @@ def generate_and_plot_canvases(validator):
         )
         plt.axis('off')
 
-        f_diffusion_canvas = plt.figure()
+        f_diffusion_canvas = plt.figure(figsize=(6,6))
         f_diffusion_canvas.canvas.manager.set_window_title("MSI Canvas After Diffusion")
         plt.imshow(
             validator.diffusion_canvas[:, :, 0],
@@ -305,22 +305,37 @@ def generate_and_plot_canvases(validator):
         )
         plt.axis('off')
 
-        f_msi_canvas = plt.figure()
-        f_msi_canvas.canvas.manager.set_window_title("MSI Canvas Target Resolution")
+        f_msi_coordinates = plt.figure(figsize=(6,6))
+        f_msi_coordinates.canvas.manager.set_window_title("Cell Coordinates on MSI Canvas")
         plt.imshow(
             validator.ms_canvas[:, :, 0],
             vmax=np.percentile(validator.ms_canvas[:, :, 0], 99.),
             cmap='inferno'
         )
         plt.axis('off')
-
         # overlay cell centers on MSI canvas
         x_coords = []
         y_coords = []
         for _, item in validator.msi_coordinates.items():
-            x_coords.append(item[0])
-            y_coords.append(item[1])
+           x_coords.append(item[0])
+           y_coords.append(item[1])
         plt.scatter(x_coords, y_coords, color='red', s=10, marker='x')
+
+        grid_size = int(np.ceil(np.sqrt(len(validator.mass_list))))
+        if grid_size > 5:
+            grid_size = 5  # limit grid size for better visibility
+        f_msi_canvas, axes = plt.subplots(grid_size, grid_size, figsize=(6,6))
+        axes = axes.flatten()
+        for i, mz in enumerate(validator.mass_list):
+            if i < 25:
+                axes[i].set_title(f"m/z {mz}")
+                axes[i].imshow(
+                    validator.ms_canvas[:, :, i],
+                    vmax=np.percentile(validator.ms_canvas[:, :, i], 99.),
+                    cmap='inferno'
+                )
+                axes[i].axis('off')
+    
 
         if validator.save_img:
             f_mic_canvas.savefig(
@@ -341,12 +356,19 @@ def generate_and_plot_canvases(validator):
                 pad_inches=0,
                 dpi=600
             )
-            f_msi_canvas.savefig(
-                validator.output + "/ms_canvas.svg",
+            f_msi_coordinates.savefig(
+                validator.output + "/msi_coordinates.svg",
                 bbox_inches='tight',
                 pad_inches=0,
                 dpi=600
             )
+            f_msi_canvas.savefig(
+                validator.output + f"/msi_canvas.svg",
+                bbox_inches='tight',
+                pad_inches=0,
+                dpi=600
+                )
+            
 
     # canvas-level metrics
     validator.canvas_metrics["n_cells"] = len(validator.mic_coordinates)

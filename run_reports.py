@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
 
-cell_path_prefix = "./Cell_images/microscopy"
 original_quarto_file = "Report.qmd"
 
 # Use a *relative* base for output (matches paths used inside the QMD)
@@ -19,59 +18,93 @@ os.makedirs(output_base, exist_ok=True)
 output_dir = os.path.join(output_base, "reports")
 os.makedirs(output_dir, exist_ok=True)
 
+textures_base_rel = "textures"
+textures_dir = os.path.join(base_dir, textures_base_rel)
+noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
+noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg")
+
+
 commands = []
 i = 0
 
-for cell_line in ["HuTu80"]:
-    for diff_coeff in [0, 1]:
-        for diff_time in [10, 20, 100]:
-            for j in range(1):
-                # Build cell path safely (handles trailing / etc.)
-                cell_path = os.path.join(cell_path_prefix, cell_line)
 
-                # Make a unique copy of the QMD for this run (dynamic naming)
-                temp_qmd = f"Report_run_{i}.qmd"
-                shutil.copy(
-                    os.path.join(base_dir, original_quarto_file),
-                    os.path.join(base_dir, temp_qmd),
-                )
 
-                # Per-run *relative* output dir: "output/run_i"
-                run_output_rel = os.path.join(output_base_rel, f"run_{i}")   # <--- CHANGED
-                run_output_abs = os.path.join(base_dir, run_output_rel)
-                os.makedirs(run_output_abs, exist_ok=True)
+for j in range(1):
+    for remove_ambiguous in [True, False]:
 
-                # Build parameter overrides as a list (no shell quoting issues)
-                param_overrides = [
-                    "-P", f"path_sample_cells:{cell_path}",
-                    "-P", "allow_multiplets:True",
-                    "-P", f"diffusion_coeff:{diff_coeff}",
-                    "-P", f"diffusion_total_time:{diff_time}",
-                    "-P", "teaching_imprecision:5",
-                    "-P", "remove_ambiguous:False",
-                    "-P", "rotation:0",
-                    "-P", "ms_spacing:5",
-                    "-P", f"seed:{j}",
-                    "-P", "use_perfect_segmentation:True",
-                    "-P", "scale:1",
-                    "-P", "use_perfect_registration:True",
-                    "-P", "save_img:True",
-                    "-P", "canvas_size:1000",
-                    "-P", "cell_density:0.2",
-                    "-P", f"output:{run_output_rel}",        # <--- pass RELATIVE path
-                ]
+        # Build parameter overrides as a list (no shell quoting issues)
+        param_overrides_best_case = [
+            "-P", "allow_multiplets:True",
+            "-P", "diffusion_coeff:1",
+            "-P", "diffusion_total_time:0",
+            "-P", f"remove_ambiguous:{remove_ambiguous}",
+            "-P", "rotation:0",
+            "-P", "scale:1.0",
+            "-P", "ms_spacing:5",
+            "-P", "texture:None",
+            "-P", f"texture_path:None",
+            "-P", "texture_epsilon:0",
+            "-P", f"seed:{j}",    
+        ]
 
-                output_file = f"Report_ms{i}.pdf"
+        param_overrides_real_case = [
+            "-P", "allow_multiplets:True",
+            "-P", "diffusion_coeff:1",
+            "-P", "diffusion_total_time:100",
+            "-P", f"remove_ambiguous:{remove_ambiguous}",
+            "-P", "rotation:0.2",
+            "-P", "scale:1.005",
+            "-P", "ms_spacing:8",
+            "-P", f"texture_path:{noise_texture}",
+            "-P", "texture_epsilon:0.05",
+            "-P", f"seed:{j}",
+        ]
 
-                cmd = [
-                    "quarto", "render", temp_qmd,
-                    *param_overrides,
-                    "--output", output_file,
-                    "--output-dir", output_dir,
-                ]
+        param_overrides_worst_case = [
+            "-P", "allow_multiplets:True",
+            "-P", "diffusion_coeff:1",
+            "-P", "diffusion_total_time:300",
+            "-P", f"remove_ambiguous:{remove_ambiguous}",
+            "-P", "rotation:5",
+            "-P", "scale:1.05",
+            "-P", "ms_spacing:20",
+            "-P", f"texture_path:{noise_gradient_texture}",
+            "-P", "texture_epsilon:0.2",
+            "-P", f"seed:{j}",
+        ]
 
-                commands.append((i, cmd, temp_qmd))
-                i += 1
+        param_settings = [param_overrides_best_case, param_overrides_real_case, param_overrides_worst_case]
+
+          
+
+        for param_override in param_settings:
+            # Make a unique copy of the QMD for this run (dynamic naming)
+            temp_qmd = f"Report_run_{i}.qmd"
+            shutil.copy(
+                os.path.join(base_dir, original_quarto_file),
+                os.path.join(base_dir, temp_qmd),
+            )
+
+            # Per-run *relative* output dir: "output/run_i"
+            run_output_rel = os.path.join(output_base_rel, f"run_{i}")   # <--- CHANGED
+            run_output_abs = os.path.join(base_dir, run_output_rel)
+            os.makedirs(run_output_abs, exist_ok=True)
+
+            param_override.append("-P")
+            param_override.append(f"output:{run_output_rel}")
+            output_file = f"Report_ms{i}.pdf"
+
+
+
+            cmd = [
+                "quarto", "render", temp_qmd,
+                *param_override,
+                "--output", output_file,
+                "--output-dir", output_dir,
+            ]
+
+            commands.append((i, cmd, temp_qmd))
+            i += 1
 
 
 def run_quarto(task):
@@ -99,9 +132,12 @@ def run_quarto(task):
 
 max_workers = os.cpu_count()
 
-with ThreadPoolExecutor(max_workers=max_workers) as executor:
-    futures = [executor.submit(run_quarto, task) for task in commands]
-    for f in as_completed(futures):
-        idx, returncode = f.result()
-        status = "OK" if returncode == 0 else f"FAILED ({returncode})"
-        print(f"[{datetime.datetime.now().time()}] Run {idx} finished: {status}")
+print(commands[0])
+
+
+# with ThreadPoolExecutor(max_workers=max_workers) as executor:
+#    futures = [executor.submit(run_quarto, task) for task in commands]
+#    for f in as_completed(futures):
+#        idx, returncode = f.result()
+#        status = "OK" if returncode == 0 else f"FAILED ({returncode})"
+#        print(f"[{datetime.datetime.now().time()}] Run {idx} finished: {status}")

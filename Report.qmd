@@ -29,30 +29,28 @@ def convert_to_float_and_round(value, decimal=4):
 #| tags: [parameters]
 output="./output/"
 allow_multiplets=True
-use_perfect_registration=True
+use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
-canvas_size=1250
+canvas_size=2000
 mic_spacing=0.325
 ms_spacing=5
 cell_density=0.2
 max_cell_placement_iterations=1000
-rotation=1
+rotation=0
 scale=1.00
-mass_list=[0, 1, 2, 3]
-noise_loc=0.0
-noise_scale=0.0
-seed=42
+mass_list=[369.35, 760.58, 744.55, 958.78]
+seed=0
 plot=True
 save_img=True
 remove_ambiguous=True
 cell_diameter=120
-texture=None
+texture="registration"
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon=0.1
-diffusion_total_time=1.0
+diffusion_total_time=1
 diffusion_dt=0.1
-diffusion_coeff=1.0
+diffusion_coeff=0
 diffusion_target_max_area=10.0
 diffusion_smooth_window=7
 diffusion_min_boundary_points=160
@@ -70,13 +68,13 @@ parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 15, 3],
                 mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["uniform", 0, 0]
+                mass_list[3] : ["normal", 10, 15]
                 }
 parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 22, 3],
-                mass_list[2] : ["normal", 8, 3],
-                mass_list[3] : ["uniform", 0, 0]
+                mass_list[2] : ["uniform", 0, 0],
+                mass_list[3] : ["normal", 22, 3]
                 }
 
 A = CellType("A", parameters_A, 0.5)
@@ -114,14 +112,13 @@ A = Validator(
     texture_epsilon=texture_epsilon)
 canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
 mass_list = A.mass_list
-filename = f"{output}/spectra_hist_{mass_list[0]}.svg"
 ```
 
 # Settings
 
 ```{python}
 settings = A.return_settings()
-html_table = pd.DataFrame(list(settings.items()), columns=['Key', 'Value']).to_html(index=False)
+html_table = pd.DataFrame(list(settings.items()), columns=['Key', 'Value']).to_html(index=False, header=True )
 display(HTML(html_table))
 
 #cell_types = A.cell_types
@@ -132,33 +129,38 @@ display(HTML(html_table))
 #    cell_type_table = pd.DataFrame(list(parameters.values())[1:], columns=["distribution", "location", "scale"])
 #    cell_type_table.insert(0, "m/z", A.mass_list)
 #    print(f"Cell Type {name} makes up {population*100}% of the total cell population")
-#    display(HTML(cell_type_table.to_html(index=False)))
+#    display(HTML(cell_type_table.to_html(index=False, header=True )))
 ```
 
-![Cell Populations](`{python} f"{output}/cell_type_distributions.svg"`){#fig-cell-populations}
+![Cell Populations](`{python} f"{output}/cell_type_distributions.svg"`){fig-align="center" width=80%}
 
 
 {{< pagebreak >}}
 
 # Generated Canvas
 
-::: {layout="[[40,-10,40], [40,-10,40]]"}
+::: {#fig-canvasses layout="[[45,-10,45],[45,-10,45]]" width=80%}
 
+![Microscopy Canvas](`{python} f"{output}/mic_canvas.svg"`){#fig-mic_canvas}
 
-![Microscopy Canvas](`{python} f"{output}/mic_canvas.svg"`)
+![Mask Canvas](`{python} f"{output}/mask_canvas.svg"`){#fig-mask_canvas}
 
-![Mask Canvas](`{python} f"{output}/mask_canvas.svg"`)
+![MSI Coordinates](`{python} f"{output}/msi_coordinates.svg"`){#fig-msi_coordinates}
 
-![MSI Canvas](`{python} f"{output}/ms_canvas.svg"`)
-
-![Pertubated MSI Canvas](`{python} f"{output}/pertubated_ms_canvas.svg"`)
+![Pertubated MSI Canvas](`{python} f"{output}/pertubated_msi_canvas.svg"`){#fig-pertubated_msi_canvas}
 
 :::
+
+{{< pagebreak >}}
+
+![MSI Canvas](`{python} f"{output}/msi_canvas.svg"`){}
+
+
 
 ```{python}
 df = pd.DataFrame(list(canvas_metrics.items()), columns=['Key', 'Value'])
 #df['Value'] = df['Value'].apply(convert_to_float_and_round)
-html_table = df.to_html(index=False)
+html_table = df.to_html(index=False, header=True)
 display(HTML(html_table))
 ```
 
@@ -166,18 +168,18 @@ display(HTML(html_table))
 
 # Registration
 
-::: {layout="[[45,-10,45]]"}
+::: {#fig-registration layout-ncol=2 width=90%}
 
-![Registration Error](`{python} f"{output}/Registration_error_plot.svg"`)
+![Registration Error](`{python} f"{output}/Registration_error_plot.svg"`){#fig-registration_error}
 
-![Registration Overlay](`{python} f"{output}/registration_overlay.svg"`)
+![Registration Overlay](`{python} f"{output}/registration_overlay.svg"`){#fig-registration_overlay}
 
 :::
 
 ```{python}
 df = pd.DataFrame(list(registration_metrics.items()), columns=['Key', 'Value'])
 df['Value'] = df['Value'].apply(convert_to_float_and_round)
-html_table = df.to_html(index=False)
+html_table = df.to_html(index=False, header=True)
 display(HTML(html_table))
 ```
 
@@ -188,12 +190,12 @@ display(HTML(html_table))
 
 ::: {layout="[[45,-10,45]]"}
 
-![Segmentation](`{python} f"{output}/segmentation_results.svg"`)
+![](`{python} f"{output}/segmentation_results.svg"`)
 
 ```{python}
 df = pd.DataFrame(list(segmentation_metrics.items()), columns=['Key', 'Value'])
 df['Value'] = df['Value'].apply(convert_to_float_and_round, decimal=3)
-html_table = df.to_html(index=False)
+html_table = df.to_html(index=False, header=True)
 display(HTML(html_table))
 ```
 
@@ -203,10 +205,7 @@ display(HTML(html_table))
 
 # Spectra Compilation
 
-
-::: {layout="[[45,-10,45],[100]]"}
-
-![Spectra Compilation Histogram](`{python} filename`){#fig-spectra_hist}
+![Spectra Compilation Histogram](`{python} f"{output}/spectra_hist.svg"`){#fig-spectra_hist width=80%}
 
 ![FPR Histogram](`{python} f"{output}/fpr_hist.svg"`){#fig-fpr_hist}
 
@@ -217,22 +216,29 @@ df2 = df2.fillna(0)
 df2.insert(0, 'Metric', df.loc[~df['Key'].isin(["time", "FPR"]), 'Key'].to_list())
 for mz in mass_list:
     df2[mz] = df2[mz].apply(convert_to_float_and_round, decimal=2)
-html_table = df2.to_html(index=False)
+html_table = df2.to_html(index=False, header=True )
 display(HTML(html_table))
-print(f"mean FPR is {spectra_metrics['FPR']:.2f}% \nSpectra compilation took {spectra_metrics['time']} s")
+print(f"mean FPR is {spectra_metrics['FPR']:.2f}%")
+#print(f"Spectra compilation took {spectra_metrics['time']} s")
 ```
-:::
+
 
 {{< pagebreak >}}
 
 # Clustering
 
+::: {layout="[[70,-10,20]]"}
 
 ![Principal Component Analysis](`{python} f"{output}/pca.svg"`){#fig-pca}
 
 ```{python}
-print(f"Adjusted Rand index for KMeans Clustering: {cluster_metrics['adjusted_rand_index']}")
 print("Contingency Matrix")
 df = pd.DataFrame(cluster_metrics["contingency_matrix"])
-display(HTML(df.to_html(index=False)))
+display(HTML(df.to_html(index=False, header=True )))
+```
+
+:::
+
+```{python}
+print(f"Adjusted Rand index for KMeans Clustering: {cluster_metrics['adjusted_rand_index']}")
 ```

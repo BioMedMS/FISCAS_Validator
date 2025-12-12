@@ -21,11 +21,21 @@ import time
 from scipy.optimize import linear_sum_assignment
 import pickle 
 from sklearn.decomposition import PCA
-
-
-
 from canvas_generation import generate_and_plot_canvases
-from diffusion import diffuse_mask_batched
+
+
+SMALL_SIZE = 10
+MEDIUM_SIZE = 12
+BIGGER_SIZE = 16
+
+plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
+plt.rc('axes', titlesize=MEDIUM_SIZE)     # fontsize of the axes title
+plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
+plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
+plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
+plt.rc('figure', autolayout=True)        # automatically adjust subplot parameters to fit the figure
 
 
 class Validator:
@@ -34,35 +44,33 @@ class Validator:
         output="./output",
         allow_multiplets=True, # allow placement of cell clusters
         use_perfect_registration=False, # skip registration by using the inverse of perturbation transform
-        use_perfect_segmentation=False, # skip segmentation by using the ground truth masks
-        teaching_imprecision=5,  # accuracy of landmark registration in µm
+        use_perfect_segmentation=True, # skip segmentation by using the ground truth masks
+        teaching_imprecision=10,  # accuracy of landmark registration in µm
         canvas_size=2000,  # in µm
         mic_spacing=0.325,  # pixel size of microscope canvas in µm 10X ~ 0.65; 20X ~ 0.325; 50X ~ 0.13
         ms_spacing=1,  # pixel size of msi in µm
-        cell_density=0.05,  # percentage of total canvas area
+        cell_density=0.2,  # percentage of total canvas area
         max_cell_placement_iterations=1000, # max attempts to place cells on canvas
         rotation=0,  # in degree
         scale=1.0,
-        mass_list=[577.5, 760.68], # list of m/z values to simulate
-        noise_loc=0.0,  # mean of noise level; default 0.1
-        noise_scale=0.0,  # spread of noise level; default 0.2
+        mass_list=[369.35, 760.58, 744.55, 958.78], # list of m/z values to simulate
         seed=0, # random seed for reproducibility
         plot=True, # plot canvasses
-        save_img=False, # save canvasses in output directory
+        save_img=True, # save canvasses in output directory
         remove_ambiguous=True, # remove pixel that touch more than one cell
         cell_diameter=0, # parameter for cell segmentation
         render_animation=False, # render animation of spectra compilation
-        texture=None, # apply texture to msi canvas
+        texture="registration", # apply texture to msi canvas
         texture_path="./textures/texture.jpg", 
-        texture_epsilon=1, #strength of texture; -1 < epsilon < 1
-        diffusion_total_time=500.0,
+        texture_epsilon=0, #strength of texture; -1 < epsilon < 1
+        diffusion_total_time=100.0,
         diffusion_dt=0.1,
         diffusion_coeff=1.0,
         diffusion_target_max_area=10.0,
         diffusion_smooth_window=7,
         diffusion_min_boundary_points=160,
         diffusion_barrier_alpha=0.1,
-        diffusion_leaky_outer_boundary=False):  
+        diffusion_leaky_outer_boundary=True):  
         
         self.cell_types = cell_types
         self.output = output
@@ -78,8 +86,6 @@ class Validator:
         self.rotation = rotation
         self.scale = scale
         self.mass_list = mass_list
-        self.noise_loc = noise_loc
-        self.noise_scale = noise_scale
         self.seed = seed
         self.plot = plot
         self.save_img = save_img
@@ -111,7 +117,7 @@ class Validator:
         if self.plot or self.save_img:
             n = len(self.mass_list)
             c = int(np.ceil(np.sqrt(n)))
-            fig, ax = plt.subplots(c, c) # ToDo Adjust plot for len(mass_list) > 4
+            fig, ax = plt.subplots(c, c, figsize=(6,6)) 
             k = 0
             colors = ["red", "black", "blue", "green", "orange", "purple", "brown", "pink"]
             for mz in mass_list:
@@ -119,7 +125,10 @@ class Validator:
                     try:
                         m = cell_type.parameters[mz][1]
                         s = cell_type.parameters[mz][2]
-                        x = np.linspace(m - 4*s, m + 4*s, 100)
+                        min_x = m - 4*s
+                        min_x = min_x if min_x >= 0 else 0
+                        max_x = m + 4*s
+                        x = np.linspace(min_x, max_x, 100)
                         if cell_type.parameters[mz][0] == "normal":
                             y = (1 / (s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - m) / s) ** 2)
                         if cell_type.parameters[mz][0] == "uniform":
@@ -154,8 +163,6 @@ class Validator:
             "rotation": self.rotation,
             "scale": self.scale,
             "mass_list": self.mass_list,
-            "noise_loc": self.noise_loc,
-            "noise_scale": self.noise_scale,
             "seed": self.seed,
             "plot": self.plot,
             "save_img": self.save_img,
@@ -419,12 +426,12 @@ class Validator:
             error.append(landmark_fixed - landmark_moving)
         error = np.array(error)
         if self.plot or self.save_img:
-            fig, ax = plt.subplots()
+            fig, ax = plt.subplots(figsize=(6,6))
             radii = [1,3,5,7,10]
             for radius in radii:
                 circle = plt.Circle((0, 0), radius, color='grey', fill=False, linestyle='-', linewidth=0.5)
                 ax.add_artist(circle)
-                ax.text(0, -radius, str(radius), fontsize=8, ha='center', va='center', color='grey',
+                ax.text(0, -radius, str(radius), fontsize=12, ha='center', va='center', color='grey',
                     bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
             ax.set_aspect('equal', 'box')
             limit = max(radii) + 1
@@ -433,8 +440,8 @@ class Validator:
             #ax.set_xlabel('Error X in µm')
             #ax.set_ylabel('Error Y in µm')
             #ax.set_title('Registration Error Plot')
-            ax.scatter(0,0, color='grey', s=100, marker='+')
-            ax.scatter(error[:,0], error[:,1], color='blue', s=30, marker='.', zorder=10)
+            ax.scatter(0,0, color='grey', s=150, marker='+')
+            ax.scatter(error[:,0], error[:,1], color='blue', s=70, marker='.', zorder=10)
             plt.axis('off')
             if self.save_img:
                 plt.savefig(self.output + "/Registration_error_plot.svg", bbox_inches='tight', pad_inches=0, dpi=600)
@@ -549,7 +556,7 @@ class Validator:
             maldi_img = self.add_texture(maldi_img, self.texture_path)
 
         if self.plot or self.save_img:
-            fig = plt.figure()
+            fig = plt.figure(figsize=(6,6))
             plt.imshow(
                 maldi_img,
                 vmax=np.percentile(maldi_img, 99.),
@@ -558,7 +565,7 @@ class Validator:
             plt.axis('off')
             if self.save_img:
                 fig.savefig(
-                    self.output + "/pertubated_ms_canvas.svg",
+                    self.output + "/pertubated_msi_canvas.svg",
                     bbox_inches='tight',
                     pad_inches=0,
                     dpi=600
@@ -641,7 +648,7 @@ class Validator:
                                          moving_sitk.GetPixelID()
                                          )
             composite_img = sitk.Compose([self.normalize_to_uint8(landmark_registration_sitk), self.normalize_to_uint8(landmark_registration_sitk), self.normalize_to_uint8(mic_sitk)])
-            plt.figure()
+            plt.figure(figsize=(6,6))
             plt.imshow(sitk.GetArrayViewFromImage(composite_img))
             plt.axis('off')
             #plt.title("Initial Transform for Registration")
@@ -697,7 +704,7 @@ class Validator:
                                      )
             composite_img = sitk.Compose([self.normalize_to_uint8(moving_sitk), self.normalize_to_uint8(moving_sitk), self.normalize_to_uint8(test_sitk)])
             self.registered_img = sitk.GetArrayFromImage(composite_img)
-            plt.figure()
+            plt.figure(figsize=(6,6))
             #plt.title("Registration Overlay")
             plt.imshow(sitk.GetArrayViewFromImage(composite_img))
             plt.axis('off')
@@ -762,7 +769,7 @@ class Validator:
             overlay_img = np.zeros((len(masks), len(masks[0]), 3))
             overlay_img[:,:,0] = mask_cut_cleared
             overlay_img[:,:,1] = masks_cleared
-            plt.figure()
+            plt.figure(figsize=(6,6))
             #plt.title("Segmentation")
             plt.imshow(overlay_img)
             plt.axis('off')
@@ -805,7 +812,7 @@ class Validator:
                     if i == 0 and j == 0:
                         import matplotlib as mpl
                         mpl.use('Agg')
-                    fig, ax = plt.subplots(1,2)
+                    fig, ax = plt.subplots(1,2, figsize=(6,6))
                     ax[0].imshow(masks_cleared)
                     ax[1].imshow(self.maldi_canvas[:,:,0], cmap='inferno', vmax=np.percentile(self.maldi_canvas[:,:,0], 99.))
                     ax[1].add_patch(patches.Rectangle((j-0.5, i-0.5), 1, 1, linewidth=0, edgecolor='red', facecolor='red', alpha=1))  # Render the whole pixel red
@@ -839,6 +846,13 @@ class Validator:
         spectra_metrics_all_mz_var = []
         cells_missed_all_mz = []
         deviation = np.zeros_like(cells)
+
+        if self.plot or self.save_img:
+            grid_size = int(np.ceil(np.sqrt(len(self.mass_list))))
+            if grid_size > 5:
+                grid_size = 5
+            f_histograms, axes = plt.subplots(grid_size, grid_size, figsize=(6,4))
+            axes = axes.flatten()
 
         for i in range(len(self.mass_list)):
             spectra_comparison = []
@@ -883,15 +897,14 @@ class Validator:
             spectra_comparison = np.array(spectra_comparison) * 100
             spectra_comparison = spectra_comparison[~np.isnan(spectra_comparison) & ~np.isinf(spectra_comparison)]
             if self.plot or self.save_img:
-                plt.figure()
-                plt.hist(spectra_comparison, bins=100)
-                plt.title(f"m/z {self.mass_list[i]}")
-                if self.save_img:
-                    plt.savefig(self.output + f"/spectra_hist_{self.mass_list[i]}.svg", bbox_inches='tight', pad_inches=0, dpi=600)
+                if i < 25:
+                    axes[i].hist(spectra_comparison, bins=100)
+                    axes[i].set_title(f"m/z {self.mass_list[i]}")
             spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison[spectra_comparison!=100])))
             spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
             cells_missed_all_mz.append(np.sum(spectra_comparison==100))
-
+        if self.save_img:
+            f_histograms.savefig(self.output + "/spectra_hist.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
         np.save(self.output + "/true_spectra.npy", spectra)
         standardized_spectra = StandardScaler().fit_transform(spectra)
@@ -913,7 +926,7 @@ class Validator:
             pca = PCA(n_components=2)
             pca_result = pca.fit_transform(standardized_spectra)
             unique_labels, true_labels_int = np.unique(true_labels, return_inverse=True)
-            plt.figure(figsize=(8,6))
+            plt.figure(figsize=(6,4))
             scatter = plt.scatter(pca_result[:, 0], pca_result[:, 1], c=true_labels_int, cmap='prism', alpha=0.7, linewidth=1.5)
             handles, _ = scatter.legend_elements()
             plt.xlabel('PC1')
@@ -927,7 +940,7 @@ class Validator:
         fpr = np.sum(deviation, axis=1) / (np.sum(cells, axis=1) + np.sum(deviation, axis=1)) * 100
         fpr = np.nan_to_num(fpr, 0)
         if self.plot or self.save_img:
-            plt.figure()
+            plt.figure(figsize=(6,2))
             plt.hist(fpr, bins=100)
             plt.title(f"FPR")
             if self.save_img:
