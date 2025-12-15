@@ -827,7 +827,9 @@ class Validator:
                             text_coverage.set_text(f"GT deviation: {(intensity-cells[cell_id,0])*100/intensity:.2f}%")
                         except Exception as e:
                             continue
-                    plt.savefig(f"./output/animation/img_{k}.jpg", dpi=300)
+                    anim_dir = os.path.join(self.output, "animation")
+                    os.makedirs(anim_dir, exist_ok=True)
+                    plt.savefig(os.path.join(anim_dir, f"img_{k}.jpg"), dpi=300)
                     plt.close()
                 k += 1
 
@@ -946,13 +948,13 @@ class Validator:
         self.spectra_metrics['time'] = stop-start
         
 
-        with open('canvas_to_mask.pkl', 'wb') as f:
+        with open(os.path.join(self.output, 'canvas_to_mask.pkl'), 'wb') as f:
             pickle.dump(canvas_to_mask, f)
-        with open('cell_intensities.pkl', 'wb') as f:
+        with open(os.path.join(self.output, 'cell_intensities.pkl'), 'wb') as f:
             pickle.dump(self.cell_intensities, f)
-        with open('cells.pkl', 'wb') as f:
+        with open(os.path.join(self.output, 'cells.pkl'), 'wb') as f:
             pickle.dump(cells, f)
-        with open('cell_labels.pkl', 'wb') as f:
+        with open(os.path.join(self.output, 'cell_labels.pkl'), 'wb') as f:
             pickle.dump(self.cell_labels, f)
             
         
@@ -993,56 +995,55 @@ class CellType:
     def get_directory(self):
         return self.parameters["path"]
 
+if __name__== "__main__":
+    mass_list = [0,1,2,3]
+    seed = 2
+    random.seed(seed)
+    np.random.seed(seed)
+    parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+                    mass_list[0] : ["normal", 15, 5], 
+                    mass_list[1] : ["normal", 15, 3],
+                    mass_list[2] : ["normal", 15, 3],
+                    mass_list[3] : ["uniform", 0, 0]
+                    }
+    parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+                    mass_list[0] : ["normal", 15, 5], 
+                    mass_list[1] : ["normal", 22, 3],
+                    mass_list[2] : ["normal", 8, 3],
+                    mass_list[3] : ["uniform", 0, 0]
+                    }
 
-mass_list = [0,1,2,3]
-seed = 2
-random.seed(seed)
-np.random.seed(seed)
-parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
-                mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 15, 3],
-                mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["uniform", 0, 0]
-                }
-parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
-                mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 22, 3],
-                mass_list[2] : ["normal", 8, 3],
-                mass_list[3] : ["uniform", 0, 0]
-                }
+    A = CellType("A", parameters_A, 0.5)
+    B = CellType("B", parameters_B, 0.5)
 
-A = CellType("A", parameters_A, 0.5)
-B = CellType("B", parameters_B, 0.5)
+    valid = Validator(
+        use_perfect_segmentation=True, 
+        use_perfect_registration=True, 
+        allow_multiplets=True,
+        remove_ambiguous=False,
+        seed=9502, 
+        scale=1, 
+        teaching_imprecision=5, 
+        rotation=5, 
+        ms_spacing=5, 
+        plot=True, 
+        save_img=True, 
+        canvas_size=1000, 
+        cell_density=0.2, 
+        mass_list=mass_list,
+        cell_types = [A, B],
+        render_animation=False,
+        diffusion_total_time=1.0,
+        diffusion_dt=0.1,
+        diffusion_coeff=3,
+        diffusion_target_max_area=10.0,
+        diffusion_smooth_window=7,
+        diffusion_min_boundary_points=160,
+        diffusion_barrier_alpha=0.5,
+        diffusion_leaky_outer_boundary=True,
+        texture='registration',
+        texture_path="./textures/noise_150x150.jpg",
+        texture_epsilon=0.5)
 
-valid = Validator(
-    use_perfect_segmentation=True, 
-    use_perfect_registration=True, 
-    allow_multiplets=True,
-    remove_ambiguous=False,
-    seed=9502, 
-    scale=1, 
-    teaching_imprecision=5, 
-    rotation=5, 
-    ms_spacing=5, 
-    plot=True, 
-    save_img=True, 
-    canvas_size=1000, 
-    cell_density=0.2, 
-    mass_list=mass_list,
-    cell_types = [A, B],
-    render_animation=False,
-    diffusion_total_time=1.0,
-    diffusion_dt=0.1,
-    diffusion_coeff=3,
-    diffusion_target_max_area=10.0,
-    diffusion_smooth_window=7,
-    diffusion_min_boundary_points=160,
-    diffusion_barrier_alpha=0.5,
-    diffusion_leaky_outer_boundary=True,
-    texture='registration',
-    texture_path="./textures/noise_150x150.jpg",
-    texture_epsilon=0.5)
-
-a, b, c, d, e = valid.main()
-_ = valid.return_settings()
-#valid.main()
+    a, b, c, d, e = valid.main()
+    _ = valid.return_settings()

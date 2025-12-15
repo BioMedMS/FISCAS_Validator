@@ -85,6 +85,7 @@ B = CellType("B", parameters_B, 0.5)
 cell_types=[A,B]
 
 A = Validator(
+    output=output,
     use_perfect_segmentation=use_perfect_segmentation, 
     use_perfect_registration=use_perfect_registration, 
     allow_multiplets=allow_multiplets,
