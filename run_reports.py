@@ -22,7 +22,7 @@ textures_base_rel = "textures"
 textures_dir = os.path.join(base_dir, textures_base_rel)
 noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
 noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg")
-
+print(noise_texture)
 
 commands = []
 i = 0
@@ -135,9 +135,9 @@ max_workers = os.cpu_count()
 print(commands[0])
 
 
-# with ThreadPoolExecutor(max_workers=max_workers) as executor:
-#    futures = [executor.submit(run_quarto, task) for task in commands]
-#    for f in as_completed(futures):
-#        idx, returncode = f.result()
-#        status = "OK" if returncode == 0 else f"FAILED ({returncode})"
-#        print(f"[{datetime.datetime.now().time()}] Run {idx} finished: {status}")
+with ThreadPoolExecutor(max_workers=max_workers) as executor:
+   futures = [executor.submit(run_quarto, task) for task in commands]
+   for f in as_completed(futures):
+       idx, returncode = f.result()
+       status = "OK" if returncode == 0 else f"FAILED ({returncode})"
+       print(f"[{datetime.datetime.now().time()}] Run {idx} finished: {status}")
