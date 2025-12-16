@@ -1014,17 +1014,17 @@ if __name__== "__main__":
     random.seed(seed)
     np.random.seed(seed)
     parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
-                    mass_list[0] : ["normal", 15, 5], 
-                    mass_list[1] : ["normal", 15, 3],
-                    mass_list[2] : ["normal", 15, 3],
-                    mass_list[3] : ["uniform", 0, 0]
-                    }
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 15, 3],
+                mass_list[2] : ["normal", 15, 3],
+                mass_list[3] : ["normal", 10, 15]
+                }
     parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
-                    mass_list[0] : ["normal", 15, 5], 
-                    mass_list[1] : ["normal", 22, 3],
-                    mass_list[2] : ["normal", 8, 3],
-                    mass_list[3] : ["uniform", 0, 0]
-                    }
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 22, 3],
+                mass_list[2] : ["uniform", 0, 0],
+                mass_list[3] : ["normal", 22, 3]
+                }
 
     A = CellType("A", parameters_A, 0.5)
     B = CellType("B", parameters_B, 0.5)

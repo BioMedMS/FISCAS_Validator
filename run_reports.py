@@ -22,7 +22,6 @@ textures_base_rel = "textures"
 textures_dir = os.path.join(base_dir, textures_base_rel)
 noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
 noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg")
-print(noise_texture)
 
 commands = []
 i = 0
@@ -131,8 +130,6 @@ def run_quarto(task):
 
 
 max_workers = os.cpu_count()
-
-print(commands[0])
 
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
