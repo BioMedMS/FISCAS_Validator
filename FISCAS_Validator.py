@@ -58,9 +58,6 @@ class Validator:
         diffusion_total_time=500.0,
         diffusion_dt=0.1,
         diffusion_coeff=1.0,
-        diffusion_target_max_area=10.0,
-        diffusion_smooth_window=7,
-        diffusion_min_boundary_points=160,
         diffusion_barrier_alpha=0.1,
         diffusion_leaky_outer_boundary=False):  
         
@@ -101,9 +98,6 @@ class Validator:
         self.diffusion_total_time=diffusion_total_time
         self.diffusion_dt=diffusion_dt
         self.diffusion_coeff=diffusion_coeff
-        self.diffusion_target_max_area=diffusion_target_max_area
-        self.diffusion_smooth_window=diffusion_smooth_window
-        self.diffusion_min_boundary_points=diffusion_min_boundary_points
         self.diffusion_barrier_alpha=diffusion_barrier_alpha
         self.diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary
         plt.rcParams.update({'figure.max_open_warning': 0})
@@ -167,9 +161,6 @@ class Validator:
             "diffusion_total_time": self.diffusion_total_time,
             "diffusion_dt": self.diffusion_dt,
             "diffusion_coeff": self.diffusion_coeff,
-            "diffusion_target_max_area": self.diffusion_target_max_area,
-            "diffusion_smooth_window": self.diffusion_smooth_window,
-            "diffusion_min_boundary_points": self.diffusion_min_boundary_points,
             "diffusion_barrier_alpha": self.diffusion_barrier_alpha,
             "diffusion_leaky_outer_boundary": self.diffusion_leaky_outer_boundary  
         }
@@ -1033,12 +1024,9 @@ if __name__== "__main__":
         mass_list=mass_list,
         cell_types = [A, B],
         render_animation=False,
-        diffusion_total_time=1.0,
-        diffusion_dt=0.1,
+        diffusion_total_time=40.0,
+        diffusion_dt=1,
         diffusion_coeff=3,
-        diffusion_target_max_area=10.0,
-        diffusion_smooth_window=7,
-        diffusion_min_boundary_points=160,
         diffusion_barrier_alpha=0.5,
         diffusion_leaky_outer_boundary=True,
         texture='registration',
