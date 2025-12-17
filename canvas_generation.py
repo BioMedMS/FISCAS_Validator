@@ -255,9 +255,6 @@ def generate_and_plot_canvases(validator):
         total_time=validator.diffusion_total_time,
         dt=validator.diffusion_dt,
         diffusion_coeff=validator.diffusion_coeff,
-        target_max_area=validator.diffusion_target_max_area,
-        smooth_window=validator.diffusion_smooth_window,
-        min_boundary_points=validator.diffusion_min_boundary_points,
         barrier_alpha=validator.diffusion_barrier_alpha,
         leaky_outer_boundary=validator.diffusion_leaky_outer_boundary
     )

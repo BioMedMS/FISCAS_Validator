@@ -1,451 +1,168 @@
 import numpy as np
-from skimage import measure
-import triangle as tr
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
-
 import matplotlib.pyplot as plt
 
-# ---------- Geometry & Triangulation from mask ----------
 
-def smooth_closed_curve(points, window_size=9):
+
+def _build_pixel_laplacian(mask, diffusion_coeff=1.0, barrier_alpha=0.1):
     """
-    Simple moving-average smoothing of a closed 2D curve.
-    """
-    if window_size < 2:
-        return points.copy()
+    Build a sparse weighted graph Laplacian on a 2D grid (4-neighborhood),
+    with reduced coupling across label boundaries.
 
-    pts = np.asarray(points)
-    n = len(pts)
-    k = window_size // 2
+    mask: (H, W) integer-like labels. Background is typically 0, but treated
+          like any other label for boundary detection.
 
-    padded = np.vstack([pts[-k:], pts, pts[:k]])
-    kernel = np.ones(window_size) / window_size
-
-    x_smooth = np.convolve(padded[:, 0], kernel, mode="valid")
-    y_smooth = np.convolve(padded[:, 1], kernel, mode="valid")
-
-    smoothed = np.column_stack([x_smooth, y_smooth])
-    assert smoothed.shape[0] == n
-    return smoothed
-
-def resample_closed_curve(points, n_samples):
-    """
-    Resample a closed polyline to n_samples points with approximately
-    equal arc-length spacing.
-    """
-    pts = np.asarray(points)
-    if not np.allclose(pts[0], pts[-1]):
-        pts = np.vstack([pts, pts[0]])
-
-    seg = np.diff(pts, axis=0)
-    seglen = np.linalg.norm(seg, axis=1)
-    cumlen = np.concatenate([[0.0], np.cumsum(seglen)])
-    total_len = cumlen[-1]
-
-    s_new = np.linspace(0.0, total_len, n_samples + 1)[:-1]
-
-    x_new = np.interp(s_new, cumlen, pts[:, 0])
-    y_new = np.interp(s_new, cumlen, pts[:, 1])
-    return np.column_stack([x_new, y_new])
-
-def triangulate_from_mask(
-    mask,
-    target_max_area=1.0,
-    smooth_window=7,
-    min_boundary_points=160,
-    ):
-    """
-    Triangulate a rectangular canvas with:
-      - outer rectangle boundary,
-      - mask boundary as an inner constrained polygon.
-
-    mask: 2D array (H, W), nonzero = "inside blob".
+    For each adjacent pair (p, q):
+      w = diffusion_coeff
+      if mask[p] != mask[q]: w *= barrier_alpha
 
     Returns:
-        tri_vertices: (Nv, 2)
-        triangles:    (Nt, 3)
-        mask:         (H, W) as bool
+        K: (N, N) sparse CSR matrix, N=H*W
     """
-    canvas = np.asarray(mask)
-    h, w = canvas.shape
-    mask_bool = canvas.astype(bool)
+    m = np.asarray(mask)
+    if m.ndim != 2:
+        raise ValueError("mask must be 2D (H, W).")
+    H, W = m.shape
+    N = H * W
 
-    # Extract the largest contour of the mask
-    contours = measure.find_contours(mask_bool, level=0.5)
-    if len(contours) == 0:
-        raise RuntimeError("No contour found in mask.")
-    contour = max(contours, key=len)          # (N, 2) in (row, col)
-    boundary_pts = np.fliplr(contour).astype(float)  # (N, 2) in (x, y)
+    # Map (y, x) -> linear index
+    def idx(y, x):
+        return y * W + x
 
-    # Smooth the boundary
-    boundary_pts = smooth_closed_curve(boundary_pts, window_size=smooth_window)
+    I = []
+    J = []
+    V = []
 
-    # Choose boundary point density to roughly match desired triangle size
-    target_edge = np.sqrt(4.0 * target_max_area / np.sqrt(3.0))
-    pts_closed = np.vstack([boundary_pts, boundary_pts[0]])
-    seg = np.diff(pts_closed, axis=0)
-    seglen = np.linalg.norm(seg, axis=1)
-    perimeter = seglen.sum()
-    n_boundary = int(perimeter / target_edge)
-    n_boundary = max(n_boundary, min_boundary_points)
+    def add_edge(a, b, w):
+        # Laplacian contributions for an undirected edge:
+        # K[a,a] += w; K[b,b] += w; K[a,b] -= w; K[b,a] -= w
+        I.extend([a, b, a, b])
+        J.extend([a, b, b, a])
+        V.extend([w, w, -w, -w])
 
-    boundary_pts = resample_closed_curve(boundary_pts, n_boundary)
-    n_inner = len(boundary_pts)
+    D = float(diffusion_coeff)
+    alpha = float(barrier_alpha)
 
-    # Outer rectangular boundary
-    outer_pts = np.array([
-        [0.0,     0.0],
-        [w - 1.0, 0.0],
-        [w - 1.0, h - 1.0],
-        [0.0,     h - 1.0],
-    ])
-    n_outer = len(outer_pts)
+    # Horizontal edges
+    for y in range(H):
+        for x in range(W - 1):
+            a = idx(y, x)
+            b = idx(y, x + 1)
+            w = D * (alpha if m[y, x] != m[y, x + 1] else 1.0)
+            if w != 0.0:
+                add_edge(a, b, w)
 
-    outer_segments = np.array([
-        [0, 1],
-        [1, 2],
-        [2, 3],
-        [3, 0],
-    ], dtype=int)
+    # Vertical edges
+    for y in range(H - 1):
+        for x in range(W):
+            a = idx(y, x)
+            b = idx(y + 1, x)
+            w = D * (alpha if m[y, x] != m[y + 1, x] else 1.0)
+            if w != 0.0:
+                add_edge(a, b, w)
 
-    # Inner (mask) boundary segments
-    inner_indices = np.arange(n_inner, dtype=int) + n_outer
-    inner_segments = np.column_stack([
-        inner_indices,
-        np.roll(inner_indices, -1),
-    ])
+    K = sp.coo_matrix((V, (I, J)), shape=(N, N)).tocsr()
+    return K
 
-    vertices = np.vstack([outer_pts, boundary_pts])
-    segments = np.vstack([outer_segments, inner_segments])
 
-    A = {"vertices": vertices, "segments": segments}
-    flags = f"pqDa{target_max_area}"
-    B = tr.triangulate(A, flags)
+def _outer_boundary_indices(H, W):
+    """Linear indices for the outer image boundary."""
+    if H == 1 and W == 1:
+        return np.array([0], dtype=int)
 
-    tri_vertices = B["vertices"]
-    triangles = B["triangles"]
+    top = np.arange(0, W, dtype=int)
+    bottom = np.arange((H - 1) * W, H * W, dtype=int)
+    left = np.arange(0, H * W, W, dtype=int)
+    right = np.arange(W - 1, H * W, W, dtype=int)
+    return np.unique(np.concatenate([top, bottom, left, right]))
 
-    return tri_vertices, triangles, mask_bool
-
-# ---------- FEM Assembly (Mass & Stiffness for Diffusion) ----------
-
-def assemble_M_and_K(vertices, triangles, diffusion_coeff=1.0):
-    """
-    Assemble global mass matrix M and stiffness matrix K for
-    u_t = diffusion_coeff * Δu  (P1 FEM, constant coeff).
-    """
-    Nv = vertices.shape[0]
-    Nt = triangles.shape[0]
-
-    I_M, J_M, V_M = [], [], []
-    I_K, J_K, V_K = [], [], []
-
-    for t in range(Nt):
-        idx = triangles[t]
-        x = vertices[idx, 0]
-        y = vertices[idx, 1]
-
-        mat = np.array([
-            [1.0, x[0], y[0]],
-            [1.0, x[1], y[1]],
-            [1.0, x[2], y[2]],
-        ])
-        area = 0.5 * np.abs(np.linalg.det(mat))
-        if area <= 0:
-            continue
-
-        # Gradients of basis functions
-        b = np.array([y[1] - y[2], y[2] - y[0], y[0] - y[1]])
-        c = np.array([x[2] - x[1], x[0] - x[2], x[1] - x[0]])
-
-        # Local stiffness matrix (Laplace)
-        Ke = diffusion_coeff * (np.outer(b, b) + np.outer(c, c)) / (4.0 * area)
-
-        # Local consistent mass matrix (P1)
-        Me = (area / 12.0) * np.array(
-            [[2, 1, 1],
-             [1, 2, 1],
-             [1, 1, 2]]
-        )
-
-        for a_local in range(3):
-            a = idx[a_local]
-            for b_local in range(3):
-                b_idx = idx[b_local]
-
-                I_K.append(a)
-                J_K.append(b_idx)
-                V_K.append(Ke[a_local, b_local])
-
-                I_M.append(a)
-                J_M.append(b_idx)
-                V_M.append(Me[a_local, b_local])
-
-    K = sp.coo_matrix((V_K, (I_K, J_K)), shape=(Nv, Nv)).tocsr()
-    M = sp.coo_matrix((V_M, (I_M, J_M)), shape=(Nv, Nv)).tocsr()
-    return M, K
-
-# ---------- Triangle classification & barriers ----------
-
-def classify_triangles_by_centroid(vertices, triangles, canvas_bool):
-    """
-    Return a boolean array 'inside_tri' of length Nt:
-    True if the triangle's centroid lies inside the blob (canvas_bool==1).
-    """
-    h, w = canvas_bool.shape
-    mask = canvas_bool.astype(bool)
-
-    tri_pts = vertices[triangles]          # (Nt, 3, 2)
-    centroids = tri_pts.mean(axis=1)       # (Nt, 2)
-    cx = np.clip(np.round(centroids[:, 0]).astype(int), 0, w - 1)
-    cy = np.clip(np.round(centroids[:, 1]).astype(int), 0, h - 1)
-
-    inside_tri = mask[cy, cx]
-    return inside_tri
-
-def build_edge_triangle_map(triangles):
-    """
-    Build a mapping: edge (i, j) -> list of incident triangle indices.
-    Edges use sorted vertex pairs: (min(i,j), max(i,j)).
-    """
-    edge_map = {}
-    for t_idx, tri in enumerate(triangles):
-        a, b, c = tri
-        edges = [(a, b), (b, c), (c, a)]
-        for i, j in edges:
-            key = (i, j) if i < j else (j, i)
-            if key not in edge_map:
-                edge_map[key] = []
-            edge_map[key].append(t_idx)
-    return edge_map
-
-def find_barrier_edges(triangles, inside_tri):
-    """
-    Identify edges shared by two triangles of different types
-    (one inside, one outside).
-
-    Returns a list of edges as vertex index pairs.
-    """
-    edge_map = build_edge_triangle_map(triangles)
-    barrier_edges = []
-
-    for (i, j), tri_list in edge_map.items():
-        if len(tri_list) == 2:
-            t1, t2 = tri_list
-            if inside_tri[t1] != inside_tri[t2]:
-                barrier_edges.append((i, j))
-
-    return barrier_edges
-
-def find_outer_boundary_vertices(triangles):
-    """Return the indices of vertices that lie on the *outer* boundary
-    of the triangulated canvas.
-
-    We detect boundary edges as those that belong to exactly one triangle.
-    The endpoints of such edges are boundary vertices.
-
-    Note: inner mask boundaries are shared by two triangles, so they are
-    not picked up here.
-    """
-    edge_map = build_edge_triangle_map(triangles)
-    boundary_vertices = set()
-    for (i, j), tri_list in edge_map.items():
-        if len(tri_list) == 1:
-            boundary_vertices.add(i)
-            boundary_vertices.add(j)
-    return np.array(sorted(boundary_vertices), dtype=int)
-
-def weaken_diffusion_on_edges(K, barrier_edges, alpha=0.1):
-    """Mass-conserving weakening of diffusion across the given edges.
-
-    Parameters
-    ----------
-    K : sparse matrix
-        Global stiffness matrix.
-    barrier_edges : iterable of (i, j)
-        Vertex index pairs for edges that should have reduced diffusion.
-    alpha : float in (0, 1]
-        Factor by which to scale diffusion across those edges.
-        alpha = 1.0 -> no barrier (full permeability)
-        alpha < 1.0 -> reduced permeability.
-
-    This function always preserves the row-sum-zero structure of K,
-    so diffusion across the mask boundary does *not* create or destroy
-    mass. It only reduces the flux between the two sides.
-    """
-    K_lil = K.tolil(copy=True)
-
-    for (i, j) in barrier_edges:
-        if i == j:
-            continue  # just in case
-
-        kij_old = K_lil[i, j]
-        kji_old = K_lil[j, i]
-
-        if kij_old == 0 and kji_old == 0:
-            continue
-
-        kij_new = alpha * kij_old
-        kji_new = alpha * kji_old
-
-        delta_ij = kij_new - kij_old
-        delta_ji = kji_new - kji_old
-
-        # Update off-diagonals
-        K_lil[i, j] = kij_new
-        K_lil[j, i] = kji_new
-
-        # Adjust diagonals so that row sums remain unchanged
-        K_lil[i, i] -= delta_ij
-        K_lil[j, j] -= delta_ji
-
-    return K_lil.tocsr()
-
-# ---------- Batched diffusion on mask ----------
 
 def diffuse_mask_batched(
     mask,
     u0_batch,
     total_time,
     dt=0.1,
-    diffusion_coeff=1.0,
-    target_max_area=1.0,
-    smooth_window=7,
-    min_boundary_points=160,
-    barrier_alpha=0.1,
+    diffusion_coeff=1.0,     # can be scalar or (B,)
+    barrier_alpha=0.1,       # can be scalar or (B,)
     leaky_outer_boundary=True,
-    ):
-    """Perform diffusion on a domain defined by 'mask', for a batch of initial
-    fields given in 'u0_batch'.
-
-    Parameters
-    ----------
-    mask : (H, W) array-like
-        Binary or boolean mask. Nonzero = "inside blob".
-        Used only to locate the interface and build barrier edges.
-
-    u0_batch : (H, W, B) array-like
-        Initial conditions. First two dimensions must match mask.
-        Third dimension is batch index.
-
-    total_time : float
-        Total diffusion time.
-
-    dt : float
-        Time step for implicit Euler.
-
-    diffusion_coeff : float
-        Constant diffusion coefficient D.
-
-    target_max_area, smooth_window, min_boundary_points :
-        Parameters for triangulation and boundary smoothing.
-
-    barrier_alpha : float in (0,1]
-        Factor to weaken diffusion across *mask* boundary (between inside
-        and outside). This is always mass-conserving.
-
-    leaky_outer_boundary : bool
-        If False (default), the outer canvas boundary has the usual
-        no-flux (Neumann) condition: total mass is conserved (up to
-        numerical error).
-        If True, after each timestep we clamp the solution to zero at
-        the outer boundary vertices, so mass can leak out of the image
-        across its border.
+):
     """
-    mask_arr = np.asarray(mask)
-    u0_arr = np.asarray(u0_batch)
-    if mask_arr.ndim != 2:
+    Pixel-based diffusion with barriers on label boundaries.
+
+    mask : (H, W) label/index mask. Background should be 0.
+    u0_batch : (H, W, B) initial fields
+
+    diffusion_coeff: float or array-like of shape (B,)
+    barrier_alpha:   float or array-like of shape (B,)
+    """
+    m = np.asarray(mask)
+    u0 = np.asarray(u0_batch)
+
+    if m.ndim != 2:
         raise ValueError("mask must be 2D (H, W).")
-    if u0_arr.ndim != 3:
+    if u0.ndim != 3:
         raise ValueError("u0_batch must be 3D (H, W, B).")
 
-    H, W = mask_arr.shape
-    if u0_arr.shape[0] != H or u0_arr.shape[1] != W:
+    H, W = m.shape
+    if u0.shape[0] != H or u0.shape[1] != W:
         raise ValueError("u0_batch first two dims must match mask shape.")
 
-    # --- NEW: if total diffusion time is not larger than dt, skip diffusion ---
-    # (no computation, just return a copy of the original batch)
     if total_time <= dt:
-        return u0_arr.copy()
+        return u0.copy()
 
-    # 1) Triangulate from mask
-    vertices, triangles, mask_bool = triangulate_from_mask(
-        mask_arr,
-        target_max_area=target_max_area,
-        smooth_window=smooth_window,
-        min_boundary_points=min_boundary_points,
-    )
+    N = H * W
+    B = u0.shape[2]
 
-    # 2) Assemble FEM matrices
-    M, K = assemble_M_and_K(vertices, triangles, diffusion_coeff=diffusion_coeff)
+    # Normalize coeffs to per-layer arrays of length B
+    D = np.asarray(diffusion_coeff, dtype=float)
+    Apha = np.asarray(barrier_alpha, dtype=float)
 
-    # 3) Build barrier edges from mask (mass-conserving)
-    inside_tri = classify_triangles_by_centroid(vertices, triangles, mask_bool)
-    barrier_edges = find_barrier_edges(triangles, inside_tri)
-    K = weaken_diffusion_on_edges(K, barrier_edges, alpha=barrier_alpha)
+    if D.ndim == 0:
+        D = np.full(B, float(D), dtype=float)
+    elif D.shape != (B,):
+        raise ValueError(f"diffusion_coeff must be scalar or shape (B,), got {D.shape}")
 
-    # Outer canvas boundary vertices (for optional leakage)
-    if leaky_outer_boundary:
-        outer_boundary_vertices = find_outer_boundary_vertices(triangles)
-    else:
-        outer_boundary_vertices = None
+    if Apha.ndim == 0:
+        Apha = np.full(B, float(Apha), dtype=float)
+    elif Apha.shape != (B,):
+        raise ValueError(f"barrier_alpha must be scalar or shape (B,), got {Apha.shape}")
 
-    Nv = vertices.shape[0]
-    B = u0_arr.shape[2]
-
-    # 4) Map grid initial conditions to FEM vertices (nearest-neighbor)
-    x_vert = vertices[:, 0]
-    y_vert = vertices[:, 1]
-    px = np.clip(np.round(x_vert).astype(int), 0, W - 1)
-    py = np.clip(np.round(y_vert).astype(int), 0, H - 1)
-
-    U = np.empty((Nv, B), dtype=float)
-    for b in range(B):
-        U[:, b] = u0_arr[py, px, b]
-
-    # 5) Implicit Euler time-stepping: (M + dt K) U^{n+1} = M U^n
+    boundary = _outer_boundary_indices(H, W) if leaky_outer_boundary else None
     num_steps = int(np.round(total_time / dt))
-    # no need for a ValueError any more; we've returned early if total_time <= dt
 
-    A = M + dt * K
-    A_factorized = spla.factorized(A.tocsc())
+    out = np.empty_like(u0, dtype=float)
 
-    for _ in range(num_steps):
-        rhs = M @ U  # (Nv, B)
-        # Solve for each batch slice
-        for b in range(B):
-            U[:, b] = A_factorized(rhs[:, b])
-            if outer_boundary_vertices is not None:
-                # Dirichlet 0 on outer canvas boundary => leak out
-                U[outer_boundary_vertices, b] = 0.0
+    # Diffuse each layer independently with its own matrix
+    for b in range(B):
+        # Build stiffness (Laplacian) for this layer
+        K = _build_pixel_laplacian(
+            m,
+            diffusion_coeff=D[b],
+            barrier_alpha=Apha[b],
+        )
 
-    # 6) Map final vertex values back to grid using FEM interpolation
-    import matplotlib.tri as mtri
+        # Implicit Euler: (I + dt K) u^{n+1} = u^n
+        I = sp.identity(N, format="csr")
+        A_mat = (I + dt * K).tocsc()
+        solve = spla.factorized(A_mat)
 
-    triang = mtri.Triangulation(vertices[:, 0], vertices[:, 1], triangles)
+        U = u0[..., b].reshape(N).astype(float, copy=True)
 
-    yy, xx = np.mgrid[0:H, 0:W]
-    x_flat = xx.ravel()
-    y_flat = yy.ravel()
+        for _ in range(num_steps):
+            U = solve(U)
+            if boundary is not None:
+                U[boundary] = 0.0
 
-    u_final_grid = np.empty((H, W, B), dtype=float)
+        out[..., b] = U.reshape(H, W)
 
     for b in range(B):
-        u_vals = U[:, b]
-        interpolator = mtri.LinearTriInterpolator(triang, u_vals)
-        z = interpolator(x_flat, y_flat)
-        z = z.reshape(H, W)
+        plt.figure(figsize=(5, 5))
+        plt.imshow(out[..., b], cmap="viridis")
+        plt.colorbar()
+        plt.title(f"Diffused layer {b}")
+        plt.axis("off")
+        plt.savefig(f"diffused_layer_{b}.png", dpi=150, bbox_inches="tight")
+        plt.close()
 
-        layer = u0_arr[:, :, b].copy()
-
-        if np.ma.isMaskedArray(z):
-            vals = z.filled(0.0)
-            mask_valid = ~z.mask
-            layer[mask_valid] = vals[mask_valid]
-        else:
-            layer[:, :] = z
-
-        u_final_grid[:, :, b] = layer
-
-    return u_final_grid
+    return out
