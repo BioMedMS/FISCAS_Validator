@@ -1,6 +1,8 @@
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+import matplotlib.pyplot as plt
+
 
 
 def _build_pixel_laplacian(mask, diffusion_coeff=1.0, barrier_alpha=0.1):
@@ -81,8 +83,8 @@ def diffuse_mask_batched(
     u0_batch,
     total_time,
     dt=0.1,
-    diffusion_coeff=1.0,
-    barrier_alpha=0.1,
+    diffusion_coeff=1.0,     # can be scalar or (B,)
+    barrier_alpha=0.1,       # can be scalar or (B,)
     leaky_outer_boundary=True,
 ):
     """
@@ -90,6 +92,9 @@ def diffuse_mask_batched(
 
     mask : (H, W) label/index mask. Background should be 0.
     u0_batch : (H, W, B) initial fields
+
+    diffusion_coeff: float or array-like of shape (B,)
+    barrier_alpha:   float or array-like of shape (B,)
     """
     m = np.asarray(mask)
     u0 = np.asarray(u0_batch)
@@ -103,36 +108,61 @@ def diffuse_mask_batched(
     if u0.shape[0] != H or u0.shape[1] != W:
         raise ValueError("u0_batch first two dims must match mask shape.")
 
-    # Match your prior optimization behavior
     if total_time <= dt:
         return u0.copy()
 
     N = H * W
     B = u0.shape[2]
 
-    # Build stiffness (Laplacian) once
-    K = _build_pixel_laplacian(
-        m,
-        diffusion_coeff=diffusion_coeff,
-        barrier_alpha=barrier_alpha,
-    )
+    # Normalize coeffs to per-layer arrays of length B
+    D = np.asarray(diffusion_coeff, dtype=float)
+    Apha = np.asarray(barrier_alpha, dtype=float)
 
-    # Implicit Euler: (I + dt K) u^{n+1} = u^n
-    I = sp.identity(N, format="csr")
-    A = (I + dt * K).tocsc()
-    solve = spla.factorized(A)
+    if D.ndim == 0:
+        D = np.full(B, float(D), dtype=float)
+    elif D.shape != (B,):
+        raise ValueError(f"diffusion_coeff must be scalar or shape (B,), got {D.shape}")
 
-    # Flatten batch to (N, B)
-    U = u0.reshape(N, B).astype(float, copy=True)
+    if Apha.ndim == 0:
+        Apha = np.full(B, float(Apha), dtype=float)
+    elif Apha.shape != (B,):
+        raise ValueError(f"barrier_alpha must be scalar or shape (B,), got {Apha.shape}")
 
     boundary = _outer_boundary_indices(H, W) if leaky_outer_boundary else None
-
     num_steps = int(np.round(total_time / dt))
-    for _ in range(num_steps):
-        # rhs = U (since M = I)
-        for b in range(B):
-            U[:, b] = solve(U[:, b])
-            if boundary is not None:
-                U[boundary, b] = 0.0
 
-    return U.reshape(H, W, B)
+    out = np.empty_like(u0, dtype=float)
+
+    # Diffuse each layer independently with its own matrix
+    for b in range(B):
+        # Build stiffness (Laplacian) for this layer
+        K = _build_pixel_laplacian(
+            m,
+            diffusion_coeff=D[b],
+            barrier_alpha=Apha[b],
+        )
+
+        # Implicit Euler: (I + dt K) u^{n+1} = u^n
+        I = sp.identity(N, format="csr")
+        A_mat = (I + dt * K).tocsc()
+        solve = spla.factorized(A_mat)
+
+        U = u0[..., b].reshape(N).astype(float, copy=True)
+
+        for _ in range(num_steps):
+            U = solve(U)
+            if boundary is not None:
+                U[boundary] = 0.0
+
+        out[..., b] = U.reshape(H, W)
+
+    for b in range(B):
+        plt.figure(figsize=(5, 5))
+        plt.imshow(out[..., b], cmap="viridis")
+        plt.colorbar()
+        plt.title(f"Diffused layer {b}")
+        plt.axis("off")
+        plt.savefig(f"diffused_layer_{b}.png", dpi=150, bbox_inches="tight")
+        plt.close()
+
+    return out
