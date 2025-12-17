@@ -156,13 +156,4 @@ def diffuse_mask_batched(
 
         out[..., b] = U.reshape(H, W)
 
-    for b in range(B):
-        plt.figure(figsize=(5, 5))
-        plt.imshow(out[..., b], cmap="viridis")
-        plt.colorbar()
-        plt.title(f"Diffused layer {b}")
-        plt.axis("off")
-        plt.savefig(f"diffused_layer_{b}.png", dpi=150, bbox_inches="tight")
-        plt.close()
-
     return out
