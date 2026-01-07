@@ -69,8 +69,8 @@ def generate_and_plot_canvases(validator):
          len(validator.mass_list))
     )
     validator.ms_canvas = np.zeros(
-        (int(len(validator.mic_canvas) * 0.5 * mic_to_ms),
-         int(len(validator.mic_canvas) * 0.5 * mic_to_ms),
+        (int(round(len(validator.mic_canvas) * 0.5 * mic_to_ms)),
+         int(round(len(validator.mic_canvas[0]) * 0.5 * mic_to_ms)),
          len(validator.mass_list))
     )
 
@@ -261,6 +261,11 @@ def generate_and_plot_canvases(validator):
         barrier_alpha=validator.diffusion_barrier_alpha,
         leaky_outer_boundary=validator.diffusion_leaky_outer_boundary
     )
+
+    print(f"mask_canvas size: {validator.mask_canvas.shape}")
+    print(f"ms_canvas size: {validator.ms_canvas.shape}")
+    print(f"ms_to_mic: {ms_to_mic}")
+    print(f"diffusion_canvas size: {validator.diffusion_canvas.shape}")
 
     for i in range(len(validator.mass_list)):
         validator.ms_canvas[:, :, i] = skimage.measure.block_reduce(
