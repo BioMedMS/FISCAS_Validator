@@ -45,6 +45,8 @@ def generate_and_plot_canvases(validator):
     All results are written back onto the `validator` instance.
     """
 
+
+
     start = time.perf_counter()
 
     # spacing & conversion factors
@@ -52,6 +54,7 @@ def generate_and_plot_canvases(validator):
     validator.mic_spacing = validator.ms_spacing / scaling_factor
     mic_to_ms = validator.mic_spacing / validator.ms_spacing
     ms_to_mic = validator.ms_spacing / validator.mic_spacing
+
 
     # initializing empty canvasses
     validator.mic_canvas = np.zeros(
@@ -69,10 +72,11 @@ def generate_and_plot_canvases(validator):
          len(validator.mass_list))
     )
     validator.ms_canvas = np.zeros(
-        (int(round(len(validator.mic_canvas) * 0.5 * mic_to_ms)),
-         int(round(len(validator.mic_canvas[0]) * 0.5 * mic_to_ms)),
+        (int(np.ceil(len(validator.mic_canvas) * 0.5 * mic_to_ms)),
+         int(np.ceil(len(validator.mic_canvas[0]) * 0.5 * mic_to_ms)),
          len(validator.mass_list))
     )
+
 
     # MSI TL/BR in microscopy coordinates
     msi_tl = (
@@ -247,10 +251,14 @@ def generate_and_plot_canvases(validator):
 
         current_id = current_mask_index + 1
 
+    print(f"shape mic_canvas: {validator.mic_canvas.shape}\nshape mask_canvas: {validator.mask_canvas.shape}\nshape cell_canvas: {validator.cell_canvas.shape}\nshape ms_canvas: {validator.ms_canvas.shape}")
+    
     # diffusion & downsampling into final MSI canvas
     h, w = validator.mask_canvas.shape
+    print(f"reduced mask canvas shape: {validator.mask_canvas[h // 4: -h // 4, w // 4: -w // 4].shape}")
+
     validator.diffusion_canvas = diffuse_mask_batched(
-        validator.mask_canvas[h // 4: -h // 4, w // 4: -w // 4],
+        validator.mask_canvas[h // 4: h // 4 + len(validator.cell_canvas), w // 4: w // 4 + len(validator.cell_canvas[0])],
         validator.cell_canvas,
         total_time=validator.diffusion_total_time,
         dt=validator.diffusion_dt,
@@ -259,10 +267,6 @@ def generate_and_plot_canvases(validator):
         leaky_outer_boundary=validator.diffusion_leaky_outer_boundary
     )
 
-    print(f"mask_canvas size: {validator.mask_canvas.shape}")
-    print(f"ms_canvas size: {validator.ms_canvas.shape}")
-    print(f"ms_to_mic: {ms_to_mic}")
-    print(f"diffusion_canvas size: {validator.diffusion_canvas.shape}")
 
     for i in range(len(validator.mass_list)):
         validator.ms_canvas[:, :, i] = skimage.measure.block_reduce(
@@ -305,6 +309,34 @@ def generate_and_plot_canvases(validator):
             vmax=np.percentile(validator.diffusion_canvas[:, :, 0], 99.),
             cmap='inferno'
         )
+        plt.axis('off')
+
+        fig, ax = plt.subplots(2,2, figsize=(6,6))
+        fig.canvas.manager.set_window_title("MSI Canvas After Diffusion")
+        ax[0,0].imshow(
+            validator.diffusion_canvas[:, :, 0],
+            vmax=np.percentile(validator.diffusion_canvas[:, :, 0], 99.),
+            cmap='inferno'
+        )
+        ax[0,0].set_title(f"m/z {validator.mass_list[0]}")
+        ax[0,1].imshow(
+            validator.diffusion_canvas[:, :, 1],
+            vmax=np.percentile(validator.diffusion_canvas[:, :, 0], 99.),
+            cmap='inferno'
+        )
+        ax[0,1].set_title(f"m/z {validator.mass_list[1]}")
+        ax[1,0].imshow(
+            validator.diffusion_canvas[:, :, 2],
+            vmax=np.percentile(validator.diffusion_canvas[:, :, 0], 99.),
+            cmap='inferno'
+        )
+        ax[1,0].set_title(f"m/z {validator.mass_list[2]}")
+        ax[1,1].imshow(
+            validator.diffusion_canvas[:, :, 3],
+            vmax=np.percentile(validator.diffusion_canvas[:, :, 0], 99.),
+            cmap='inferno'
+        )
+        ax[1,1].set_title(f"m/z {validator.mass_list[3]}")
         plt.axis('off')
 
         f_msi_coordinates = plt.figure(figsize=(6,6))

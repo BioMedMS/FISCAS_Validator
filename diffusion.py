@@ -2,7 +2,7 @@ import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 import matplotlib.pyplot as plt
-
+import time
 
 
 def _build_pixel_laplacian(mask, diffusion_coeff=1.0, barrier_alpha=0.1):
@@ -129,6 +129,7 @@ def diffuse_mask_batched(
         raise ValueError(f"barrier_alpha must be scalar or shape (B,), got {Apha.shape}")
 
     boundary = _outer_boundary_indices(H, W) if leaky_outer_boundary else None
+
     num_steps = int(np.round(total_time / dt))
 
     out = np.empty_like(u0, dtype=float)
@@ -141,19 +142,25 @@ def diffuse_mask_batched(
             diffusion_coeff=D[b],
             barrier_alpha=Apha[b],
         )
-
         # Implicit Euler: (I + dt K) u^{n+1} = u^n
         I = sp.identity(N, format="csr")
         A_mat = (I + dt * K).tocsc()
+        print(f"Solving A_mat for m/z {b}...")
+        start = time.perf_counter()
         solve = spla.factorized(A_mat)
-
+        end = time.perf_counter()
+        print(f"Factorized system matrix for layer {b} in {end - start:.3f} seconds.")
         U = u0[..., b].reshape(N).astype(float, copy=True)
 
         for _ in range(num_steps):
+            if _ < 10:
+                start = time.perf_counter()
             U = solve(U)
             if boundary is not None:
                 U[boundary] = 0.0
+            if _ < 10:
+                end = time.perf_counter()
+                print(f"  Time step solved in {end - start:.3f} seconds.")
 
         out[..., b] = U.reshape(H, W)
-
     return out

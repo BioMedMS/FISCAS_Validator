@@ -32,15 +32,15 @@ allow_multiplets=True
 use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
-canvas_size=2000
+canvas_size=1500
 mic_spacing=0.325
 ms_spacing=5
 cell_density=0.2
 max_cell_placement_iterations=1000
 rotation=0
 scale=1.00
-mass_list=[369.35, 760.58, 744.55, 958.78]
-seed=0
+mass_list=[744.55, 760.58, 369.35, 958.78]
+seed=1
 plot=True
 save_img=True
 remove_ambiguous=True
@@ -48,10 +48,10 @@ cell_diameter=120
 texture="registration"
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon=0.1
-diffusion_total_time=1
-diffusion_dt=0.1
-diffusion_coeff=1.0
-diffusion_barrier_alpha=0.1
+diffusion_total_time=100.0
+diffusion_dt=1
+diffusion_coeff=[0.1,1,50,10]
+diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
 diffusion_leaky_outer_boundary=True
 ```
 
@@ -104,6 +104,7 @@ A = Validator(
     texture=texture,
     texture_path=texture_path,
     texture_epsilon=texture_epsilon)
+
 canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
 mass_list = A.mass_list
 ```

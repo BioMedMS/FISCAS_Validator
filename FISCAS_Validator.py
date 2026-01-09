@@ -64,7 +64,7 @@ class Validator:
         texture_path="./textures/texture.jpg", 
         texture_epsilon=0, #strength of texture; -1 < epsilon < 1
         diffusion_total_time=100.0,
-        diffusion_dt=0.1,
+        diffusion_dt=1,
         diffusion_coeff=1.0,
         diffusion_barrier_alpha=0.1,
         diffusion_leaky_outer_boundary=True):  
@@ -868,7 +868,7 @@ class Validator:
                     meas_int = cells[mask_id][i]
                     
                     if true_int != 0:
-                        spectra_comparison.append((true_int-meas_int)/true_int)
+                        spectra_comparison.append((meas_int-true_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
                     #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
@@ -879,7 +879,7 @@ class Validator:
                     meas_int = 0
                     cells_missed += 1
                     if true_int != 0:
-                        spectra_comparison.append((true_int-meas_int)/true_int)
+                        spectra_comparison.append((meas_int-true_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
                     #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
@@ -1000,7 +1000,7 @@ class CellType:
         return self.parameters["path"]
 
 if __name__== "__main__":
-    mass_list = [0,1,2,3]
+    mass_list = [744.55,760.58,369.35,958.78]
     seed = 2
     random.seed(seed)
     np.random.seed(seed)
@@ -1024,27 +1024,28 @@ if __name__== "__main__":
         use_perfect_segmentation=True, 
         use_perfect_registration=False, 
         allow_multiplets=True,
-        remove_ambiguous=False,
+        remove_ambiguous=True,
         seed=1, 
-        scale=1.05, 
+        scale=1.0, 
         teaching_imprecision=10, 
-        rotation=5, 
-        ms_spacing=20, 
+        rotation=0, 
+        ms_spacing=5,
+        mic_spacing=0.325, 
         plot=True, 
         save_img=True, 
-        canvas_size=2000, 
+        canvas_size=1000, 
         cell_density=0.2, 
         mass_list=mass_list,
         cell_types = [A, B],
         render_animation=False,
-        diffusion_total_time=40.0,
+        diffusion_total_time=300.0,
         diffusion_dt=1,
-        diffusion_coeff=[1,2,3,4],
-        diffusion_barrier_alpha=[0,0.2,0.5,1],
+        diffusion_coeff=[0.1,1,50,10],
+        diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
         diffusion_leaky_outer_boundary=True,
         texture='registration',
         texture_path="./textures/noise_gradient_150x150.jpg",
-        texture_epsilon=0.2)
+        texture_epsilon=0.6)
 
     a, b, c, d, e = valid.main()
     _ = valid.return_settings()

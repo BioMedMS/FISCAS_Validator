@@ -28,13 +28,12 @@ i = 0
 
 
 
-for j in range(1):
+for j in range(1,2):
     for remove_ambiguous in [True, False]:
 
         # Build parameter overrides as a list (no shell quoting issues)
         param_overrides_best_case = [
             "-P", "allow_multiplets:True",
-            "-P", "diffusion_coeff:1",
             "-P", "diffusion_total_time:0",
             "-P", f"remove_ambiguous:{remove_ambiguous}",
             "-P", "rotation:0",
@@ -48,27 +47,25 @@ for j in range(1):
 
         param_overrides_real_case = [
             "-P", "allow_multiplets:True",
-            "-P", "diffusion_coeff:1",
             "-P", "diffusion_total_time:100",
             "-P", f"remove_ambiguous:{remove_ambiguous}",
             "-P", "rotation:0.2",
             "-P", "scale:1.005",
             "-P", "ms_spacing:8",
             "-P", f"texture_path:{noise_texture}",
-            "-P", "texture_epsilon:0.05",
+            "-P", "texture_epsilon:0.1",
             "-P", f"seed:{j}",
         ]
 
         param_overrides_worst_case = [
             "-P", "allow_multiplets:True",
-            "-P", "diffusion_coeff:1",
             "-P", "diffusion_total_time:300",
             "-P", f"remove_ambiguous:{remove_ambiguous}",
             "-P", "rotation:5",
             "-P", "scale:1.05",
             "-P", "ms_spacing:20",
             "-P", f"texture_path:{noise_gradient_texture}",
-            "-P", "texture_epsilon:0.2",
+            "-P", "texture_epsilon:0.5",
             "-P", f"seed:{j}",
         ]
 
