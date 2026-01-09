@@ -11,7 +11,7 @@ os.chdir(base_dir)
 original_quarto_file = "Report.qmd"
 
 # Use a *relative* base for output (matches paths used inside the QMD)
-output_base_rel = "output"                              # <--- NEW
+output_base_rel = "output"
 output_base = os.path.join(base_dir, output_base_rel)
 os.makedirs(output_base, exist_ok=True)
 
