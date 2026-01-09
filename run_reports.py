@@ -12,7 +12,7 @@ cell_path_prefix = "./Cell_images/microscopy"
 original_quarto_file = "Report.qmd"
 
 # Use a *relative* base for output (matches paths used inside the QMD)
-output_base_rel = "output"                              # <--- NEW
+output_base_rel = "output"
 output_base = os.path.join(base_dir, output_base_rel)
 os.makedirs(output_base, exist_ok=True)
 
@@ -37,7 +37,7 @@ for cell_line in ["HuTu80"]:
                 )
 
                 # Per-run *relative* output dir: "output/run_i"
-                run_output_rel = os.path.join(output_base_rel, f"run_{i}")   # <--- CHANGED
+                run_output_rel = os.path.join(output_base_rel, f"run_{i}")
                 run_output_abs = os.path.join(base_dir, run_output_rel)
                 os.makedirs(run_output_abs, exist_ok=True)
 
@@ -58,7 +58,7 @@ for cell_line in ["HuTu80"]:
                     "-P", "save_img:True",
                     "-P", "canvas_size:1000",
                     "-P", "cell_density:0.2",
-                    "-P", f"output:{run_output_rel}",        # <--- pass RELATIVE path
+                    "-P", f"output:{run_output_rel}",
                 ]
 
                 output_file = f"Report_ms{i}.pdf"
