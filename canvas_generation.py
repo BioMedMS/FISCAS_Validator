@@ -251,11 +251,9 @@ def generate_and_plot_canvases(validator):
 
         current_id = current_mask_index + 1
 
-    print(f"shape mic_canvas: {validator.mic_canvas.shape}\nshape mask_canvas: {validator.mask_canvas.shape}\nshape cell_canvas: {validator.cell_canvas.shape}\nshape ms_canvas: {validator.ms_canvas.shape}")
     
     # diffusion & downsampling into final MSI canvas
     h, w = validator.mask_canvas.shape
-    print(f"reduced mask canvas shape: {validator.mask_canvas[h // 4: -h // 4, w // 4: -w // 4].shape}")
 
     validator.diffusion_canvas = diffuse_mask_batched(
         validator.mask_canvas[h // 4: h // 4 + len(validator.cell_canvas), w // 4: w // 4 + len(validator.cell_canvas[0])],

@@ -910,8 +910,7 @@ class Validator:
         self.cluster_metrics["adjusted_rand_index"] = adjusted_rand
         self.cluster_metrics["true_labels"] = true_labels
         self.cluster_metrics["predicted_labels"] = predicted_labels
-        print(cont_matrix)
-        print(f"Adjusted Rand Index: {adjusted_rand:.4f}")
+
 
         if self.plot or self.save_img:
             pca = PCA(n_components=2)
