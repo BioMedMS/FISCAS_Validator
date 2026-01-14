@@ -109,6 +109,9 @@ class Validator:
         self.diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary
         plt.rcParams.update({'figure.max_open_warning': 0})
 
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+
         if self.plot or self.save_img:
             n = len(self.mass_list)
             c = int(np.ceil(np.sqrt(n)))
@@ -1002,9 +1005,6 @@ class CellType:
 
 if __name__== "__main__":
     mass_list = [744.55,760.58,369.35,958.78]
-    seed = 2
-    random.seed(seed)
-    np.random.seed(seed)
     parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 15, 3],
@@ -1025,8 +1025,8 @@ if __name__== "__main__":
         use_perfect_segmentation=True, 
         use_perfect_registration=False, 
         allow_multiplets=True,
-        remove_ambiguous=True,
-        seed=1, 
+        remove_ambiguous=False,
+        seed=42, 
         scale=1.0, 
         teaching_imprecision=10, 
         rotation=0, 
@@ -1034,17 +1034,17 @@ if __name__== "__main__":
         mic_spacing=0.325, 
         plot=True, 
         save_img=True, 
-        canvas_size=1000, 
+        canvas_size=1500, 
         cell_density=0.2, 
         mass_list=mass_list,
         cell_types = [A, B],
         render_animation=False,
-        diffusion_total_time=300.0,
+        diffusion_total_time=0.0,
         diffusion_dt=1,
         diffusion_coeff=[0.1,1,50,10],
         diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
         diffusion_leaky_outer_boundary=True,
-        texture='registration',
+        texture=None,
         texture_path="./textures/noise_gradient_150x150.jpg",
         texture_epsilon=0.6)
 
