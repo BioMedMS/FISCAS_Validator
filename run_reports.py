@@ -28,7 +28,7 @@ i = 0
 
 
 
-for j in range(1,2):
+for j in range(1,6):
     for remove_ambiguous in [True, False]:
 
         # Build parameter overrides as a list (no shell quoting issues)
@@ -47,7 +47,7 @@ for j in range(1,2):
 
         param_overrides_real_case = [
             "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:100",
+            "-P", "diffusion_total_time:0",
             "-P", f"remove_ambiguous:{remove_ambiguous}",
             "-P", "rotation:0.2",
             "-P", "scale:1.005",
@@ -59,7 +59,7 @@ for j in range(1,2):
 
         param_overrides_worst_case = [
             "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:300",
+            "-P", "diffusion_total_time:0",
             "-P", f"remove_ambiguous:{remove_ambiguous}",
             "-P", "rotation:5",
             "-P", "scale:1.05",
@@ -69,7 +69,7 @@ for j in range(1,2):
             "-P", f"seed:{j}",
         ]
 
-        param_settings = [param_overrides_best_case, param_overrides_real_case, param_overrides_worst_case]
+        param_settings = [param_overrides_real_case, param_overrides_worst_case]
 
           
 
@@ -125,8 +125,14 @@ def run_quarto(task):
 
     return idx, result.returncode
 
-
-max_workers = os.cpu_count()
+# Save commands to a file for debugging or later use
+commands_file = os.path.join(output_base, "commands.txt")
+with open(commands_file, "w") as f:
+    for idx, cmd, temp_qmd in commands:
+        f.write(f"Run {idx}:\n")
+        f.write(" ".join(cmd) + "\n")
+        f.write("\n")
+max_workers = 4#os.cpu_count()
 
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:

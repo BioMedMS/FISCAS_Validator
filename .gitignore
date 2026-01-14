@@ -10,6 +10,8 @@
 *.pyc
 __pycache__/
 *.pkl
+*.xlsx
+
 
 **/*.quarto_ipynb
 render_animation.py

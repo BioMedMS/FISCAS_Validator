@@ -14,6 +14,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import random
+import copy
 from IPython.display import HTML, display, SVG
 
 def convert_to_float_and_round(value, decimal=4):
@@ -39,7 +40,7 @@ cell_density=0.2
 max_cell_placement_iterations=1000
 rotation=0
 scale=1.00
-mass_list=[744.55, 760.58, 369.35, 958.78]
+mass_list=[1, 2, 3, 4]
 seed=1
 plot=True
 save_img=True
@@ -48,7 +49,7 @@ cell_diameter=120
 texture="registration"
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon=0.1
-diffusion_total_time=100.0
+diffusion_total_time=0.0
 diffusion_dt=1
 diffusion_coeff=[0.1,1,50,10]
 diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
@@ -236,4 +237,29 @@ display(HTML(df.to_html(index=False, header=True )))
 
 ```{python}
 print(f"Adjusted Rand index for KMeans Clustering: {cluster_metrics['adjusted_rand_index']}")
+```
+
+```{python}
+setting_columns = list(settings.keys())
+columns = copy.copy(setting_columns)
+parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0", "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
+for param in parameters:
+    columns.append(param)
+df = pd.DataFrame(columns=columns)
+values = []
+for setting_value in settings.values():
+    values.append(setting_value)
+
+for i in range(2):
+    values.append(float(registration_metrics['mre'][i]))
+    values.append(float(registration_metrics['mre_std'][i]))
+
+for i in range(4):
+    values.append(float(spectra_metrics['spectra_mean_deviation'][i]))
+    values.append(float(spectra_metrics['spectra_deviation_variance'][i]))
+
+values.append(float(spectra_metrics['FPR']))
+values.append(float(cluster_metrics['adjusted_rand_index']))
+df = df.append(pd.Series(values, index=df.columns), ignore_index=True)
+df.to_csv(f"./output/summary/results_summary_{settings['ID']}.csv", index=False)
 ```
