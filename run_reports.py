@@ -24,8 +24,6 @@ noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg"
 commands = []
 i = 0
 
-
-
 for j in range(1,2):
     for remove_ambiguous in [True, False]:
 
@@ -69,8 +67,6 @@ for j in range(1,2):
 
         param_settings = [param_overrides_best_case, param_overrides_real_case, param_overrides_worst_case]
 
-          
-
         for param_override in param_settings:
             # Make a unique copy of the QMD for this run (dynamic naming)
             temp_qmd = f"Report_run_{i}.qmd"
@@ -80,15 +76,13 @@ for j in range(1,2):
             )
 
             # Per-run *relative* output dir: "output/run_i"
-            run_output_rel = os.path.join(output_base_rel, f"run_{i}")   # <--- CHANGED
+            run_output_rel = os.path.join(output_base_rel, f"run_{i}")
             run_output_abs = os.path.join(base_dir, run_output_rel)
             os.makedirs(run_output_abs, exist_ok=True)
 
             param_override.append("-P")
             param_override.append(f"output:{run_output_rel}")
             output_file = f"Report_ms{i}.pdf"
-
-
 
             cmd = [
                 "quarto", "render", temp_qmd,
@@ -116,7 +110,11 @@ def run_quarto(task):
 
     return idx, result.returncode
 
-max_workers = 2
+slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
+if slurm_cpus:
+    max_workers = max(1, int(slurm_cpus))
+else:
+    max_workers = 2
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
    futures = [executor.submit(run_quarto, task) for task in commands]
