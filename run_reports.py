@@ -9,8 +9,6 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
 
 original_quarto_file = "Report.qmd"
-
-# Use a *relative* base for output (matches paths used inside the QMD)
 output_base_rel = "output"
 output_base = os.path.join(base_dir, output_base_rel)
 os.makedirs(output_base, exist_ok=True)
@@ -102,19 +100,12 @@ for j in range(1,2):
             commands.append((i, cmd, temp_qmd))
             i += 1
 
-
 def run_quarto(task):
     idx, cmd, temp_qmd = task
     print(f"[{datetime.datetime.now().time()}] Starting run {idx}")
-
-    # Use the same Python as this script (your micromamba venv)
     env = os.environ.copy()
     env["QUARTO_PYTHON"] = sys.executable
-
-    # Run from the project directory (where FISCAS_Validator.py is)
     result = subprocess.run(cmd, cwd=base_dir, env=env)
-
-    # Optional cleanup: remove the temp qmd and its notebook artifacts
     base_name = os.path.splitext(temp_qmd)[0]
     for ext in (".quarto_ipynb", ".ipynb"):
         nb_path = os.path.join(base_dir, base_name + ext)
@@ -125,9 +116,7 @@ def run_quarto(task):
 
     return idx, result.returncode
 
-
-max_workers = os.cpu_count()
-
+max_workers = 2
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
    futures = [executor.submit(run_quarto, task) for task in commands]
