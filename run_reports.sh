@@ -11,9 +11,7 @@
 #SBATCH --mail-user=j_schw74@uni-muenster.de
 
 cd /scratch/tmp/j_schw74/fiscas-validator/
-module load uv quarto
-export XDG_RUNTIME_DIR=/scratch/tmp/j_schw74/tmp/
+module load uv
 uv run run_reports.py
-rm -r ../tmp/
 echo -n "Total amount of memory used (in bytes): "
 cat /sys/fs/cgroup/$(cat /proc/self/cgroup | awk -F ':' '{print $3}')/memory.peak
