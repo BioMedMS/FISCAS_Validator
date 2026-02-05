@@ -9,6 +9,8 @@ base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
 
 original_quarto_file = "Report.qmd"
+
+# Use a *relative* base for output (matches paths used inside the QMD)
 output_base_rel = "output"
 output_base = os.path.join(base_dir, output_base_rel)
 os.makedirs(output_base, exist_ok=True)
@@ -24,82 +26,96 @@ noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg"
 commands = []
 i = 0
 
-for j in range(1,2):
-    for remove_ambiguous in [True, False]:
 
-        # Build parameter overrides as a list (no shell quoting issues)
-        param_overrides_best_case = [
-            "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:0",
-            "-P", f"remove_ambiguous:{remove_ambiguous}",
-            "-P", "rotation:0",
-            "-P", "scale:1.0",
-            "-P", "ms_spacing:5",
-            "-P", "texture:None",
-            "-P", f"texture_path:None",
-            "-P", "texture_epsilon:0",
-            "-P", f"seed:{j}",    
-        ]
 
-        param_overrides_real_case = [
-            "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:100",
-            "-P", f"remove_ambiguous:{remove_ambiguous}",
-            "-P", "rotation:0.2",
-            "-P", "scale:1.005",
-            "-P", "ms_spacing:8",
-            "-P", f"texture_path:{noise_texture}",
-            "-P", "texture_epsilon:0.1",
-            "-P", f"seed:{j}",
-        ]
+for j in range(1,312):
+    for ms_spacing in [8]:
+        for remove_ambiguous in [False]:
 
-        param_overrides_worst_case = [
-            "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:300",
-            "-P", f"remove_ambiguous:{remove_ambiguous}",
-            "-P", "rotation:5",
-            "-P", "scale:1.05",
-            "-P", "ms_spacing:20",
-            "-P", f"texture_path:{noise_gradient_texture}",
-            "-P", "texture_epsilon:0.5",
-            "-P", f"seed:{j}",
-        ]
-
-        param_settings = [param_overrides_best_case, param_overrides_real_case, param_overrides_worst_case]
-
-        for param_override in param_settings:
-            # Make a unique copy of the QMD for this run (dynamic naming)
-            temp_qmd = f"Report_run_{i}.qmd"
-            shutil.copy(
-                os.path.join(base_dir, original_quarto_file),
-                os.path.join(base_dir, temp_qmd),
-            )
-
-            # Per-run *relative* output dir: "output/run_i"
-            run_output_rel = os.path.join(output_base_rel, f"run_{i}")
-            run_output_abs = os.path.join(base_dir, run_output_rel)
-            os.makedirs(run_output_abs, exist_ok=True)
-
-            param_override.append("-P")
-            param_override.append(f"output:{run_output_rel}")
-            output_file = f"Report_ms{i}.pdf"
-
-            cmd = [
-                "quarto", "render", temp_qmd,
-                *param_override,
-                "--output", output_file,
-                "--output-dir", output_dir,
+            # Build parameter overrides as a list (no shell quoting issues)
+            param_overrides_best_case = [
+                "-P", "allow_multiplets:True",
+                "-P", "diffusion_total_time:0",
+                "-P", f"remove_ambiguous:{remove_ambiguous}",
+                "-P", "rotation:0",
+                "-P", "scale:1.0",
+                "-P", "ms_spacing:5",
+                "-P", "texture:None",
+                "-P", f"texture_path:None",
+                "-P", "texture_epsilon:0",
+                "-P", f"seed:{j}",    
             ]
 
-            commands.append((i, cmd, temp_qmd))
-            i += 1
+            param_overrides_real_case = [
+                "-P", "allow_multiplets:True",
+                "-P", "diffusion_total_time:0",
+                "-P", f"remove_ambiguous:{remove_ambiguous}",
+                "-P", "rotation:0.2",
+                "-P", "scale:1.005",
+                "-P", f"ms_spacing:8",
+                "-P", f"texture_path:{noise_texture}",
+                "-P", "texture_epsilon:0.1",
+                "-P", f"seed:{j}",
+            ]
+
+            param_overrides_worst_case = [
+                "-P", "allow_multiplets:True",
+                "-P", "diffusion_total_time:300",
+                "-P", f"remove_ambiguous:{remove_ambiguous}",
+                "-P", "rotation:5",
+                "-P", "scale:1.05",
+                "-P", "ms_spacing:20",
+                "-P", f"texture_path:{noise_gradient_texture}",
+                "-P", "texture_epsilon:0.5",
+                "-P", f"seed:{j}",
+            ]
+
+            param_settings = [param_overrides_worst_case]
+
+            
+
+            for param_override in param_settings:
+                # Make a unique copy of the QMD for this run (dynamic naming)
+                temp_qmd = f"Report_run_{i}.qmd"
+                shutil.copy(
+                    os.path.join(base_dir, original_quarto_file),
+                    os.path.join(base_dir, temp_qmd),
+                )
+
+                # Per-run *relative* output dir: "output/run_i"
+                run_output_rel = os.path.join(output_base_rel, f"run_{i}")   # <--- CHANGED
+                run_output_abs = os.path.join(base_dir, run_output_rel)
+                os.makedirs(run_output_abs, exist_ok=True)
+
+                param_override.append("-P")
+                param_override.append(f"output:{run_output_rel}")
+                output_file = f"Report_ms{i}.html"
+
+
+
+                cmd = [
+                    "quarto", "render", temp_qmd,
+                    *param_override,
+                    "--output", output_file,
+                    "--output-dir", output_dir,
+                ]
+
+                commands.append((i, cmd, temp_qmd))
+                i += 1
+
 
 def run_quarto(task):
     idx, cmd, temp_qmd = task
     print(f"[{datetime.datetime.now().time()}] Starting run {idx}")
+
+    # Use the same Python as this script (your micromamba venv)
     env = os.environ.copy()
     env["QUARTO_PYTHON"] = sys.executable
+
+    # Run from the project directory (where FISCAS_Validator.py is)
     result = subprocess.run(cmd, cwd=base_dir, env=env)
+
+    # Optional cleanup: remove the temp qmd and its notebook artifacts
     base_name = os.path.splitext(temp_qmd)[0]
     for ext in (".quarto_ipynb", ".ipynb"):
         nb_path = os.path.join(base_dir, base_name + ext)
@@ -109,6 +125,14 @@ def run_quarto(task):
         os.remove(os.path.join(base_dir, temp_qmd))
 
     return idx, result.returncode
+
+# Save commands to a file for debugging or later use
+commands_file = os.path.join(output_base, "commands.txt")
+with open(commands_file, "w") as f:
+    for idx, cmd, temp_qmd in commands:
+        f.write(f"Run {idx}:\n")
+        f.write(" ".join(cmd) + "\n")
+        f.write("\n")
 
 slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
 if slurm_cpus:

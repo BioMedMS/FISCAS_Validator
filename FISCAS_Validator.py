@@ -22,6 +22,7 @@ from scipy.optimize import linear_sum_assignment
 import pickle 
 from sklearn.decomposition import PCA
 from canvas_generation import generate_and_plot_canvases
+import uuid
 
 
 SMALL_SIZE = 10
@@ -65,10 +66,10 @@ class Validator:
         texture_epsilon=0, #strength of texture; -1 < epsilon < 1
         diffusion_total_time=100.0,
         diffusion_dt=1,
-        diffusion_coeff=1.0,
-        diffusion_barrier_alpha=0.1,
+        diffusion_coeff=[0.1,1,50,10],
+        diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
         diffusion_leaky_outer_boundary=True):  
-        
+
         self.cell_types = cell_types
         self.output = output
         self.allow_multiplets = allow_multiplets
@@ -108,6 +109,9 @@ class Validator:
         self.diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary
         plt.rcParams.update({'figure.max_open_warning': 0})
 
+        random.seed(self.seed)
+        np.random.seed(self.seed)
+
         if self.plot or self.save_img:
             n = len(self.mass_list)
             c = int(np.ceil(np.sqrt(n)))
@@ -127,7 +131,7 @@ class Validator:
                             y = (1 / (s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - m) / s) ** 2)
                         if cell_type.parameters[mz][0] == "uniform":
                             y = np.where((x >= m - s) & (x <= m + s), 1/(2*s), 0)
-                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - {mz} (μ={m}, σ={s})", color=colors[c])
+                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - " + "$\it{m/z}$ " + f"{mz} (μ={m}, σ={s})", color=colors[c])
                         ax[k//2, k%2].legend(loc='lower center', bbox_to_anchor=(0.5, 1), ncol=1)
                     except Exception as e:
                         continue
@@ -143,6 +147,7 @@ class Validator:
         for i in self.cell_types:
             cell_types.append(i.name)
         settings = {
+            "ID": uuid.uuid4(),
             "cell_types": cell_types,
             "output": self.output,
             "allow_multiplets": self.allow_multiplets,
@@ -1000,9 +1005,6 @@ class CellType:
 
 if __name__== "__main__":
     mass_list = [744.55,760.58,369.35,958.78]
-    seed = 2
-    random.seed(seed)
-    np.random.seed(seed)
     parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 15, 3],
@@ -1023,8 +1025,8 @@ if __name__== "__main__":
         use_perfect_segmentation=True, 
         use_perfect_registration=False, 
         allow_multiplets=True,
-        remove_ambiguous=True,
-        seed=1, 
+        remove_ambiguous=False,
+        seed=2566, 
         scale=1.0, 
         teaching_imprecision=10, 
         rotation=0, 
@@ -1032,17 +1034,17 @@ if __name__== "__main__":
         mic_spacing=0.325, 
         plot=True, 
         save_img=True, 
-        canvas_size=1000, 
+        canvas_size=1500, 
         cell_density=0.2, 
         mass_list=mass_list,
         cell_types = [A, B],
         render_animation=False,
-        diffusion_total_time=300.0,
+        diffusion_total_time=0.0,
         diffusion_dt=1,
         diffusion_coeff=[0.1,1,50,10],
         diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
         diffusion_leaky_outer_boundary=True,
-        texture='registration',
+        texture=None,
         texture_path="./textures/noise_gradient_150x150.jpg",
         texture_epsilon=0.6)
 
