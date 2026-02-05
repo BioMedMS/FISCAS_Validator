@@ -1,14 +1,14 @@
 import os
-import sys
-import shutil
 import datetime
-import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import random
+from FISCAS_Validator import Validator, CellType
+import numpy as np
+import copy
+import pandas as pd
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
-
-original_quarto_file = "Report.qmd"
 
 # Use a *relative* base for output (matches paths used inside the QMD)
 output_base_rel = "output"
@@ -18,121 +18,180 @@ os.makedirs(output_base, exist_ok=True)
 output_dir = os.path.join(output_base, "reports")
 os.makedirs(output_dir, exist_ok=True)
 
+
+
 textures_base_rel = "textures"
 textures_dir = os.path.join(base_dir, textures_base_rel)
 noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
 noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg")
 
-commands = []
+
 i = 0
 
+# Validator parameters
+output="./output/"
+allow_multiplets=True
+use_perfect_registration=False
+use_perfect_segmentation=True
+teaching_imprecision=10
+canvas_size=500
+mic_spacing=0.325
+ms_spacing=5
+cell_density=0.2
+max_cell_placement_iterations=1000
+rotation=0
+scale=1.00
+mass_list=[1, 2, 3, 4]
+seed=42
+plot=False
+save_img=True
+remove_ambiguous=False
+cell_diameter=120
+texture=None
+texture_path=""
+texture_epsilon=0.1
+diffusion_total_time=0.0
+diffusion_dt=1
+diffusion_coeff=[0.1,1,50,10]
+diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
+diffusion_leaky_outer_boundary=True
+
+params_best_case = {
+    "allow_multiplets": True,
+    "diffusion_total_time": 0,
+    "remove_ambiguous": False,
+    "rotation": 0,
+    "scale": 1.0,
+    "ms_spacing": 5,
+    "texture": None,
+    "texture_path": None,
+    "texture_epsilon": 0,
+}
+
+params_real_case = {
+    "allow_multiplets": True,
+    "diffusion_total_time": 100,
+    "remove_ambiguous": False,
+    "rotation": 0.2,
+    "scale": 1.005,
+    "ms_spacing": 8,
+    "texture": "registration",
+    "texture_path": noise_texture,
+    "texture_epsilon": 0.1,
+}
+
+params_worst_case = {
+    "allow_multiplets": True,
+    "diffusion_total_time": 0,
+    "remove_ambiguous": False,
+    "rotation": 5,
+    "scale": 1.05,
+    "ms_spacing": 20,
+    "texture": "registration",
+    "texture_path": noise_gradient_texture,
+    "texture_epsilon": 0.5,
+}
+
+allow_multiplets, diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon = params_worst_case.values()
 
 
-for j in range(1,312):
-    for ms_spacing in [8]:
-        for remove_ambiguous in [False]:
+validator_instances = []
+for j in range(1,5):
+    # set seed for all random number generators
+    seed = j
+    if seed == 0:
+        seed = random.randint(1, 10000)
+    random.seed(seed)
+    np.random.seed(seed)
 
-            # Build parameter overrides as a list (no shell quoting issues)
-            param_overrides_best_case = [
-                "-P", "allow_multiplets:True",
-                "-P", "diffusion_total_time:0",
-                "-P", f"remove_ambiguous:{remove_ambiguous}",
-                "-P", "rotation:0",
-                "-P", "scale:1.0",
-                "-P", "ms_spacing:5",
-                "-P", "texture:None",
-                "-P", f"texture_path:None",
-                "-P", "texture_epsilon:0",
-                "-P", f"seed:{j}",    
-            ]
+    # define cell populations
+    parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 15, 3],
+                mass_list[2] : ["normal", 15, 3],
+                mass_list[3] : ["normal", 10, 15]
+                }
+    parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+                    mass_list[0] : ["normal", 15, 5], 
+                    mass_list[1] : ["normal", 22, 3],
+                    mass_list[2] : ["uniform", 0, 0],
+                    mass_list[3] : ["normal", 22, 3]
+                    }
 
-            param_overrides_real_case = [
-                "-P", "allow_multiplets:True",
-                "-P", "diffusion_total_time:0",
-                "-P", f"remove_ambiguous:{remove_ambiguous}",
-                "-P", "rotation:0.2",
-                "-P", "scale:1.005",
-                "-P", f"ms_spacing:8",
-                "-P", f"texture_path:{noise_texture}",
-                "-P", "texture_epsilon:0.1",
-                "-P", f"seed:{j}",
-            ]
+    A = CellType("A", parameters_A, 0.5)
+    B = CellType("B", parameters_B, 0.5)
 
-            param_overrides_worst_case = [
-                "-P", "allow_multiplets:True",
-                "-P", "diffusion_total_time:300",
-                "-P", f"remove_ambiguous:{remove_ambiguous}",
-                "-P", "rotation:5",
-                "-P", "scale:1.05",
-                "-P", "ms_spacing:20",
-                "-P", f"texture_path:{noise_gradient_texture}",
-                "-P", "texture_epsilon:0.5",
-                "-P", f"seed:{j}",
-            ]
+    cell_types=[A,B]
 
-            param_settings = [param_overrides_worst_case]
-
-            
-
-            for param_override in param_settings:
-                # Make a unique copy of the QMD for this run (dynamic naming)
-                temp_qmd = f"Report_run_{i}.qmd"
-                shutil.copy(
-                    os.path.join(base_dir, original_quarto_file),
-                    os.path.join(base_dir, temp_qmd),
-                )
-
-                # Per-run *relative* output dir: "output/run_i"
-                run_output_rel = os.path.join(output_base_rel, f"run_{i}")   # <--- CHANGED
-                run_output_abs = os.path.join(base_dir, run_output_rel)
-                os.makedirs(run_output_abs, exist_ok=True)
-
-                param_override.append("-P")
-                param_override.append(f"output:{run_output_rel}")
-                output_file = f"Report_ms{i}.html"
+    run_dir = os.path.join(output_base, f"run_{j}")
+    os.makedirs(run_dir, exist_ok=True)
 
 
+    # Create validator object
+    A = Validator(
+        output=run_dir,
+        use_perfect_segmentation=use_perfect_segmentation, 
+        use_perfect_registration=use_perfect_registration, 
+        allow_multiplets=allow_multiplets,
+        remove_ambiguous=remove_ambiguous,
+        seed=seed, 
+        scale=scale, 
+        teaching_imprecision=teaching_imprecision, 
+        rotation=rotation, 
+        ms_spacing=ms_spacing, 
+        plot=plot, 
+        save_img=save_img, 
+        canvas_size=canvas_size, 
+        cell_density=cell_density, 
+        mass_list=mass_list,
+        cell_types = cell_types,
+        diffusion_total_time=diffusion_total_time,
+        diffusion_dt=diffusion_dt,
+        diffusion_coeff=diffusion_coeff,
+        diffusion_barrier_alpha=diffusion_barrier_alpha,
+        diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary,
+        texture=texture,
+        texture_path=texture_path,
+        texture_epsilon=texture_epsilon)
 
-                cmd = [
-                    "quarto", "render", temp_qmd,
-                    *param_override,
-                    "--output", output_file,
-                    "--output-dir", output_dir,
-                ]
-
-                commands.append((i, cmd, temp_qmd))
-                i += 1
+    validator_instances.append(A)
+    
 
 
-def run_quarto(task):
-    idx, cmd, temp_qmd = task
+def run_validator(idx, A):
     print(f"[{datetime.datetime.now().time()}] Starting run {idx}")
 
-    # Use the same Python as this script (your micromamba venv)
-    env = os.environ.copy()
-    env["QUARTO_PYTHON"] = sys.executable
+    canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
+    settings = A.return_settings()
+    seed = A.seed
+    setting_columns = list(settings.keys())
+    columns = copy.copy(setting_columns)
+    parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0", "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
+    for param in parameters:
+       columns.append(param)
+    df = pd.DataFrame(columns=columns)
+    values = []
+    for setting_value in settings.values():
+       values.append(setting_value)
 
-    # Run from the project directory (where FISCAS_Validator.py is)
-    result = subprocess.run(cmd, cwd=base_dir, env=env)
+    for i in range(2):
+       values.append(float(registration_metrics['mre'][i]))
+       values.append(float(registration_metrics['mre_std'][i]))
 
-    # Optional cleanup: remove the temp qmd and its notebook artifacts
-    base_name = os.path.splitext(temp_qmd)[0]
-    for ext in (".quarto_ipynb", ".ipynb"):
-        nb_path = os.path.join(base_dir, base_name + ext)
-        if os.path.exists(nb_path):
-            os.remove(nb_path)
-    if os.path.exists(os.path.join(base_dir, temp_qmd)):
-        os.remove(os.path.join(base_dir, temp_qmd))
+    for i in range(4):
+        values.append(float(spectra_metrics['spectra_mean_deviation'][i]))
+        values.append(np.sqrt(float(spectra_metrics['spectra_deviation_variance'][i])))
 
-    return idx, result.returncode
+    values.append(float(spectra_metrics['FPR']))
+    values.append(float(cluster_metrics['adjusted_rand_index']))
+    df = pd.concat([df,pd.Series(values, index=df.columns)], ignore_index=True)
 
-# Save commands to a file for debugging or later use
-commands_file = os.path.join(output_base, "commands.txt")
-with open(commands_file, "w") as f:
-    for idx, cmd, temp_qmd in commands:
-        f.write(f"Run {idx}:\n")
-        f.write(" ".join(cmd) + "\n")
-        f.write("\n")
+
+    df.to_csv(output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
+
+    return idx, 0
+
+
 
 slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
 if slurm_cpus:
@@ -140,8 +199,9 @@ if slurm_cpus:
 else:
     max_workers = 2
 
+
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-   futures = [executor.submit(run_quarto, task) for task in commands]
+   futures = [executor.submit(run_validator, idx, A) for idx, A in enumerate(validator_instances)]
    for f in as_completed(futures):
        idx, returncode = f.result()
        status = "OK" if returncode == 0 else f"FAILED ({returncode})"

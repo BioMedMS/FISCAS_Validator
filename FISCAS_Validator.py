@@ -4,6 +4,7 @@ import glob
 import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import matplotlib
 from PIL import Image
 import random
 import skimage
@@ -24,6 +25,7 @@ from sklearn.decomposition import PCA
 from canvas_generation import generate_and_plot_canvases
 import uuid
 
+matplotlib.use('Agg')
 
 SMALL_SIZE = 10
 MEDIUM_SIZE = 12
