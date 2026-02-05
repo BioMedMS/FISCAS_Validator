@@ -6,6 +6,8 @@ from FISCAS_Validator import Validator, CellType
 import numpy as np
 import copy
 import pandas as pd
+import glob
+import re
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
@@ -34,7 +36,7 @@ allow_multiplets=True
 use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
-canvas_size=500
+canvas_size=1500
 mic_spacing=0.325
 ms_spacing=5
 cell_density=0.2
@@ -82,7 +84,7 @@ params_real_case = {
 
 params_worst_case = {
     "allow_multiplets": True,
-    "diffusion_total_time": 0,
+    "diffusion_total_time": 300,
     "remove_ambiguous": False,
     "rotation": 5,
     "scale": 1.05,
@@ -92,11 +94,25 @@ params_worst_case = {
     "texture_epsilon": 0.5,
 }
 
-allow_multiplets, diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon = params_worst_case.values()
+allow_multiplets, diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon = params_best_case.values()
 
 
 validator_instances = []
-for j in range(1,5):
+result_files = glob.glob(output_dir)
+seeds = []
+for file in result_files:
+    m = re.search(r'seed_(\d+)', file)
+    seed_num = int(m.group(1)) if m else None
+    if seed_num is not None:
+        seeds.append(seed_num)
+if len(seeds) > 0:
+    start = np.max(seeds) + 1
+else:
+    start = 1
+
+for j in range(start,300):
+    
+
     # set seed for all random number generators
     seed = j
     if seed == 0:
