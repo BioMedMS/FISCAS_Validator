@@ -28,8 +28,6 @@ noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
 noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg")
 
 
-i = 0
-
 # Validator parameters
 output="./output/"
 allow_multiplets=True
@@ -98,21 +96,20 @@ allow_multiplets, diffusion_total_time, remove_ambiguous, rotation, scale, ms_sp
 
 
 validator_instances = []
-result_files = glob.glob(output_dir)
-seeds = []
+result_files = glob.glob(output_dir + "/*.csv")
+finished_seeds = []
+seeds = list(range(1,300))
 for file in result_files:
     m = re.search(r'seed_(\d+)', file)
     seed_num = int(m.group(1)) if m else None
     if seed_num is not None:
-        seeds.append(seed_num)
-if len(seeds) > 0:
-    start = np.max(seeds) + 1
-else:
-    start = 1
+        finished_seeds.append(seed_num)
 
-for j in range(start,300):
-    
+for k in finished_seeds:
+    if k in seeds:
+        seeds.remove(k)
 
+for j in seeds:
     # set seed for all random number generators
     seed = j
     if seed == 0:
@@ -174,10 +171,15 @@ for j in range(start,300):
     
 
 
-def run_validator(idx, A):
-    print(f"[{datetime.datetime.now().time()}] Starting run {idx}")
+def run_validator(A):
+    print(f"[{datetime.datetime.now().time()}] Starting run {A.seed}")
 
-    canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
+    try:
+        canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
+    except Exception as e:
+        print(f"[{datetime.datetime.now().time()}] Error in run {A.seed}: {e}")
+        return A.seed, 1
+
     settings = A.return_settings()
     seed = A.seed
     setting_columns = list(settings.keys())
@@ -205,7 +207,7 @@ def run_validator(idx, A):
 
     df.to_csv(output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
 
-    return idx, 0
+    return A.seed, 0
 
 
 
@@ -213,11 +215,11 @@ slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
 if slurm_cpus:
     max_workers = max(1, int(slurm_cpus))
 else:
-    max_workers = 2
+    max_workers = 4
 
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-   futures = [executor.submit(run_validator, idx, A) for idx, A in enumerate(validator_instances)]
+   futures = [executor.submit(run_validator, A) for A in validator_instances]
    for f in as_completed(futures):
        idx, returncode = f.result()
        status = "OK" if returncode == 0 else f"FAILED ({returncode})"
