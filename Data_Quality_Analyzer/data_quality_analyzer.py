@@ -1,27 +1,23 @@
-# Structure of the Data Quality Analyzer (DQA) module:
-
-# 1. Load Input Data
-# 2. Run FISCAS on Input Data (fiscas.py) -> Single-Cell Spectra, Segmentation 
-# 3. Estimate diffusion parameters based on MSI data and segmentation results (diffusion_estimation.py) -> Diffusion Parameters
-# 4. Simulate MSI canvas based on segmentation results and diffusion parameters (canvas_generation.py) -> Simulated MSI Canvas
-# 5. Compare similarity between simulated MSI canvas and original MSI data
-# 6. Calculate single-cell spectra (fiscas.py) of simulated MSI canvas and calculate error to single-cell spectra of original MSI data
-
-from fiscas import load_imzml
-import skimage
-import matplotlib.pyplot as plt
+from parameter_estimator import estimate_cell_parameters
 import numpy as np
-import os
 
-base_dir = os.path.dirname(os.path.abspath(__file__))
-output_dir = os.path.join(base_dir, "output")
-input_dir = os.path.join(base_dir, "input")
-os.makedirs(output_dir, exist_ok=True)
-os.makedirs(input_dir, exist_ok=True)
+mask = np.load("input/seg.npy")#[0:1068,0:996]
+target_msi = np.load("input/msi_data.npy")[:, :, 0]#[0:1068,0:996]
 
-msi_file = os.path.join(input_dir, "msi_data_1.imzML")
-mic_file = os.path.join(input_dir, "mic_data_1.tif")
-feature_list_file = os.path.join(input_dir, "feature_list_1.csv")
+result = estimate_cell_parameters(
+    mask_canvas=mask,
+    target_output=target_msi,
+    mic_spacing=1.0,
+    diffusion_total_time=0,
+    diffusion_dt=0,
+    diffusion_coeff=3.0,
+    barrier_alpha=0.5,
+    leaky_outer_boundary=True,
+    finite_diff_eps=1.0,
+    verbose=True,
+)
 
-msi_data, feature_list = load_imzml(msi_file, feature_list_file)
-mic_data = skimage.io.imread(mic_file)
+print(result.optimized_intensities)
+print(result.optimized_sigmas)
+print(result.optimized_output.shape)
+print(result.optimizer_result.success, result.optimizer_result.message)
