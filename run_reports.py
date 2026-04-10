@@ -37,7 +37,8 @@ for j in range(1,2):
             "-P", "ms_spacing:5",
             "-P", "texture:None",
             "-P", f"texture_path:None",
-            "-P", "texture_epsilon:0",
+            "-P", "texture_epsilon_add:0",
+            "-P", "texture_epsilon_multiply:0",
             "-P", f"seed:{j}",    
         ]
 
@@ -49,7 +50,8 @@ for j in range(1,2):
             "-P", "scale:1.005",
             "-P", "ms_spacing:8",
             "-P", f"texture_path:{noise_texture}",
-            "-P", "texture_epsilon:0.1",
+            "-P", "texture_epsilon_add:0.13",
+            "-P", "texture_epsilon_multiply:0.3",
             "-P", f"seed:{j}",
         ]
 
@@ -61,7 +63,8 @@ for j in range(1,2):
             "-P", "scale:1.05",
             "-P", "ms_spacing:20",
             "-P", f"texture_path:{noise_gradient_texture}",
-            "-P", "texture_epsilon:0.5",
+            "-P", "texture_epsilon_add:0.3",
+            "-P", "texture_epsilon_multiply:0.6",
             "-P", f"seed:{j}",
         ]
 
