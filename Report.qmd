@@ -36,7 +36,7 @@ output="./output/"
 use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
-canvas_size=1500
+canvas_size=1000
 mic_spacing=0.325
 ms_spacing=5
 cell_density=0.2
@@ -51,6 +51,9 @@ remove_ambiguous=False
 cell_diameter=120
 texture=None
 texture_path="./textures/noise_150x150.jpg"
+texture_epsilon_add=0.13
+texture_epsilon_multiply=0.3
+diffusion_total_time=00.0
 texture_epsilon=0.1
 diffusion_total_time=0.0
 diffusion_dt=1
@@ -106,7 +109,8 @@ A = Validator(
     diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary,
     texture=texture,
     texture_path=texture_path,
-    texture_epsilon=texture_epsilon)
+    texture_epsilon_add=texture_epsilon_add,
+    texture_epsilon_multiply=texture_epsilon_multiply)
 
 canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
 mass_list = A.mass_list
@@ -239,6 +243,31 @@ display(HTML(df.to_html(index=False, header=True )))
 
 ```{python}
 print(f"Adjusted Rand index for KMeans Clustering: {cluster_metrics['adjusted_rand_index']}")
+```
+
+```{python}
+setting_columns = list(settings.keys())
+columns = copy.copy(setting_columns)
+parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0", "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
+for param in parameters:
+    columns.append(param)
+df = pd.DataFrame(columns=columns)
+values = []
+for setting_value in settings.values():
+    values.append(setting_value)
+
+for i in range(2):
+    values.append(float(registration_metrics['mre'][i]))
+    values.append(float(registration_metrics['mre_std'][i]))
+
+for i in range(4):
+    values.append(float(spectra_metrics['spectra_mean_deviation'][i]))
+    values.append(float(spectra_metrics['spectra_deviation_variance'][i]))
+
+values.append(float(spectra_metrics['FPR']))
+values.append(float(cluster_metrics['adjusted_rand_index']))
+df = df.append(pd.Series(values, index=df.columns), ignore_index=True)
+df.to_csv(f"./output/summary/results_summary_{settings['ID']}.csv", index=False)
 ```
 
 ```{python}

@@ -20,6 +20,7 @@ from tqdm import trange
 import copy
 import time
 from scipy.optimize import linear_sum_assignment
+from scipy.ndimage import distance_transform_edt
 import pickle 
 from sklearn.decomposition import PCA
 from canvas_generation import generate_and_plot_canvases
@@ -64,7 +65,8 @@ class Validator:
         render_animation=False, # render animation of spectra compilation
         texture="registration", # apply texture to msi canvas
         texture_path="./textures/texture.jpg", 
-        texture_epsilon=0, #strength of texture; -1 < epsilon < 1
+        texture_epsilon_add=0, #strength of texture; -1 < epsilon < 1
+        texture_epsilon_multiply=0, #strength of texture; -1 < epsilon < 1
         diffusion_total_time=100.0,
         diffusion_dt=1,
         diffusion_coeff=[0.1,1,50,10],
@@ -101,7 +103,9 @@ class Validator:
         self.render_animation = render_animation
         self.texture = texture
         self.texture_path = texture_path
-        self.texture_epsilon = texture_epsilon
+        self.texture_epsilon_add = texture_epsilon_add
+        self.texture_epsilon_multiply = texture_epsilon_multiply
+
         self.diffusion_total_time=diffusion_total_time
         self.diffusion_dt=diffusion_dt
         self.diffusion_coeff=diffusion_coeff
@@ -168,7 +172,8 @@ class Validator:
             "cell_diameter": self.cell_diameter,
             "texture": self.texture,
             "texture_path": self.texture_path,
-            "texture_epsilon": self.texture_epsilon,
+            "texture_epsilon_add": self.texture_epsilon_add,
+            "texture_epsilon_multiply": self.texture_epsilon_multiply,
             "diffusion_total_time": self.diffusion_total_time,
             "diffusion_dt": self.diffusion_dt,
             "diffusion_coeff": self.diffusion_coeff,
@@ -222,24 +227,18 @@ class Validator:
     # generate MALDI signal distribution for a given cell mask
     def generate_maldi_cell(self, cell_type, mask, sigma=4.0):
         mask = copy.deepcopy(mask)
-        coords = np.argwhere(mask > 0)
-        center_of_mass = coords.mean(axis=0)
-        cx, cy = center_of_mass
-        intensities = np.zeros_like(mask, dtype=float)
+        
         intensities_all_mz = np.zeros((len(mask), len(mask[0]), len(self.mass_list)))
-        
-        for x, y in coords:
-            distance = np.sqrt((x-cx)**2 + (y-cy)**2) * self.mic_spacing
-            intensities[x, y] = np.exp(-(distance / sigma)**2) + 0.1
-        
-        # draw intensity based on cell type distribution
+        mask = mask.astype(bool)
+        dist_to_boundary = distance_transform_edt(mask)
+        dist_to_boundary[~mask] = np.nan
+        d_max = np.nanmax(dist_to_boundary)          # größter Abstand = „Mitte“ der Form
+        gradient_linear = dist_to_boundary / d_max + 0.1
+        intensities = np.nan_to_num(gradient_linear)
         cell = cell_type
         for i in range(len(self.mass_list)):
             factor = cell.get_intensity(self.mass_list[i])
-            if np.sum(intensities) > 0:
-                rescaled_intensities = intensities / np.sum(intensities) * factor
-            else:
-                rescaled_intensities = intensities * factor
+            rescaled_intensities = intensities #/ np.sum(intensities) * factor
             intensities_all_mz[:,:, i] = rescaled_intensities
         return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
@@ -471,18 +470,33 @@ class Validator:
 
 
     def add_texture(self, image, texture_path="./texture.jpg"):
-        if np.abs(self.texture_epsilon) > 1:
-            self.texture_epsilon /= np.abs(self.texture_epsilon)  # catch epsilon values outside of [-1, 1]
+        if np.abs(self.texture_epsilon_add) > 1:
+            self.texture_epsilon_add /= np.abs(self.texture_epsilon_add)  # catch epsilon values outside of [-1, 1]
         image = np.array(image)
         texture = np.array(Image.open(texture_path))
         if len(texture.shape) == 3:
             texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
         texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
-        texture = texture / np.max(texture) * self.texture_epsilon # Normalize texture and weight it by epsilon
+        texture = texture / np.max(texture) * self.texture_epsilon_add # Normalize texture and weight it by epsilon
         intensity = np.percentile(image, 99)
         texture = skimage.exposure.rescale_intensity(texture, in_range=(0,1), out_range=(0, intensity))
         combined_image = np.zeros_like(image)
         combined_image = texture + image
+        return combined_image
+
+    def multiply_texture(self, image, texture_path="./texture.jpg"):
+        if np.abs(self.texture_epsilon_multiply) > 1:
+            self.texture_epsilon_multiply /= np.abs(self.texture_epsilon_multiply)  # catch epsilon values outside of [-1, 1]
+        image = np.array(image)
+        texture = np.array(Image.open(texture_path))
+        if len(texture.shape) == 3:
+            texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
+        texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
+        texture = (texture / np.max(texture)).astype(float)
+        texture += self.texture_epsilon_multiply
+        texture = texture / np.max(texture)# Normalize texture and weight it by epsilon
+        combined_image = np.zeros_like(image)
+        combined_image = texture * image
         return combined_image
 
     def evaluate_segmentation(self, predictions, ground_truths, iou_threshold=0.5):
@@ -533,6 +547,10 @@ class Validator:
             self.pertubation_transform_maldi, pertubated_img = self.pertubate_img(img)
             self.maldi_canvas[:, :, i] = sitk.GetArrayFromImage(pertubated_img)
             if self.texture == 'all':
+                self.maldi_canvas[:, :, i] = self.multiply_texture(
+                    self.maldi_canvas[:, :, i],
+                    self.texture_path
+                )
                 self.maldi_canvas[:, :, i] = self.add_texture(
                     self.maldi_canvas[:, :, i],
                     self.texture_path
@@ -540,6 +558,7 @@ class Validator:
 
         maldi_img = self.maldi_canvas[:, :, 0]
         if self.texture == 'registration':
+            maldi_img = self.multiply_texture(maldi_img, self.texture_path)
             maldi_img = self.add_texture(maldi_img, self.texture_path)
 
         if self.plot or self.save_img:
@@ -1016,14 +1035,14 @@ if __name__== "__main__":
         use_perfect_segmentation=True, 
         use_perfect_registration=False, 
         remove_ambiguous=False,
-        seed=2566, 
+        seed=2566,  
         scale=1.0, 
         teaching_imprecision=10, 
         rotation=0.1, 
         ms_spacing=5,
         mic_spacing=0.325, 
         plot=True, 
-        save_img=True, 
+        save_img=False, 
         canvas_size=1000, 
         cell_density=0.2, 
         mass_list=mass_list,
@@ -1034,9 +1053,10 @@ if __name__== "__main__":
         diffusion_coeff=[0.1,1,50,10],
         diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
         diffusion_leaky_outer_boundary=True,
-        texture=None,
+        texture='all',
         texture_path="./textures/noise_gradient_150x150.jpg",
-        texture_epsilon=0.6)
+        texture_epsilon_add=0.13,
+        texture_epsilon_multiply=0.3,)
 
     a, b, c, d, e = valid.main()
     _ = valid.return_settings()
