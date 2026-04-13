@@ -18,8 +18,8 @@ input_dir = os.path.join(base_dir, "input")
 os.makedirs(output_dir, exist_ok=True)
 os.makedirs(input_dir, exist_ok=True)
 
-
-seg, feature_list, cell_spectra = FISCAS.generate_single_cell_spectra(input_dir, output_dir)
+F = FISCAS(input_dir, output_dir, debug=True)
+seg, feature_list, cell_spectra = F.generate_single_cell_spectra()
 
 
 

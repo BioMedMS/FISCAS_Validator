@@ -65,7 +65,7 @@ def pick_coordinates(ms_img, mic_img):
     ax1.set_title("MSI_Data")
 
     # Display Microscopy data
-    ax2.imshow(mic_img)
+    ax2.imshow(mic_img, cmap='gray', vmax=np.percentile(mic_img, 99))
     ax2.set_title("Microscopy_Data")
 
     # Register the Tool
