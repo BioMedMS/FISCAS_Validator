@@ -2,6 +2,8 @@
 
 /.quarto/
 /output
+/input
+/Data_Quality_Analyzer/input
 /reports
 /textures
 *test*.py
