@@ -204,9 +204,28 @@ def parallel_optimize_cells(sigmas,
 
     return sigmas, intensities
 
+def apply_noise_model(canvas, target):
+    r = (canvas - target)
+    shape = r.shape
+    r_flat = r.ravel()
+    mu = r_flat.mean()
+    sigma = r_flat.std()
+    g = np.random.normal(mu, sigma, size=r_flat.shape)
+    idx = np.argsort(r_flat)
+    g_sorted = np.sort(g)
+    g_assigned = np.empty_like(g)
+    g_assigned[idx] = g_sorted
+    g_assigned = g_assigned.reshape(shape)
+    result = target + g_assigned
+    return result
+
 if __name__ == "__main__":
     mask = np.load("input/seg.npy").astype(np.int32)
     canvas = np.load("input/msi_data.npy")[:, :, 500]
+    p = np.percentile(canvas, 99)
+    print(p)
+    print(np.percentile(canvas, 100))
+    canvas = np.clip(canvas, 0, p)
 
     plt.imshow(canvas, interpolation="none")
     plt.show()
@@ -260,5 +279,9 @@ if __name__ == "__main__":
         diffusion_barrier_alpha,
         ms_spacing=scaling_factor,
     )
+    plt.imshow(generated, interpolation="none")
+    plt.show()
+
+    generated = apply_noise_model(generated, canvas)
     plt.imshow(generated, interpolation="none")
     plt.show()

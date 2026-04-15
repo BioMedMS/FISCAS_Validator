@@ -423,7 +423,7 @@ def diffuse_mask_2d(
     if u0.shape != (H, W):
         raise ValueError("u0 shape must match mask shape.")
 
-    if total_time <= dt:
+    if total_time < dt:
         return u0.copy()
 
     if use_gpu and HAS_CUPY:
