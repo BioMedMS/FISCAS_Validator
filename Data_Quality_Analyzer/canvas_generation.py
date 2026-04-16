@@ -165,9 +165,9 @@ def generate_msi_from_mask_slice(
     cell_ids = cell_ids[cell_ids > 0]
 
     cell_canvas = np.zeros_like(mask_slice, dtype=np.float32)
-    for cell_id in cell_ids:
-        sigma = float(sigmas[cell_id - 1])
-        factor = float(intensities[cell_id - 1])
+    for idx, cell_id in enumerate(cell_ids):
+        sigma = float(sigmas[idx])
+        factor = float(intensities[idx])
 
         coords = np.argwhere(mask_slice == cell_id)
         if coords.shape[0] == 0:
