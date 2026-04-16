@@ -284,6 +284,7 @@ if __name__ == "__main__":
         diffusion_barrier_alpha,
         ms_spacing=scaling_factor,
     )
+    
     plt.imshow(generated, interpolation="none")
     plt.show()
 
