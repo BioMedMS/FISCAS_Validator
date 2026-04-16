@@ -8,6 +8,14 @@ import matplotlib.pyplot as plt
 from canvas_generation import generate_msi_from_mask_slice
 from error_estimation import sum_abs_diff
 
+def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
+    scaling_factor = int(mask.shape[0] / msi.shape[0])
+    print(scaling_factor)
+    new_mask = mask[left*scaling_factor:mask.shape[0]-right*scaling_factor, top*scaling_factor:mask.shape[1]-bottom*scaling_factor]
+    new_msi = msi[left:msi.shape[0]-right, top:msi.shape[1]-bottom]
+    print(new_msi)
+    return new_mask, new_msi
+
 def get_cell_neighbourhood(canvas, cell_index, padding, scaling_factor):
     rows_found = False
     first_collumn = 0
@@ -86,7 +94,7 @@ def optimize_cell_neighbourhood(sigmas,
             scaling_factor,
         ),
         method="Nelder-Mead",
-        bounds=[(1, 10000), (1, 10000)],
+        bounds=[(sigmas[cell_index - 1]-100, sigmas[cell_index - 1]+100), (intensities[cell_index - 1]-100, intensities[cell_index - 1]+100)],
     )
     return result.x
 
@@ -223,9 +231,8 @@ if __name__ == "__main__":
     mask = np.load("input/seg.npy").astype(np.int32)
     canvas = np.load("input/msi_data.npy")[:, :, 500]
     p = np.percentile(canvas, 99)
-    print(p)
-    print(np.percentile(canvas, 100))
     canvas = np.clip(canvas, 0, p)
+    mask, canvas = crop_canvas_and_msi(mask, canvas, 70, 70, 70, 70)
 
     plt.imshow(canvas, interpolation="none")
     plt.show()
@@ -243,8 +250,6 @@ if __name__ == "__main__":
     for cell_target in cell_targets:
         intensities.append(int(np.max(cell_target)))
         sigmas.append(round(cell_target.shape[0])*scaling_factor)
-    print(intensities)
-    print(sigmas)
     generated = generate_msi_from_mask_slice(
         mask,
         sigmas,
