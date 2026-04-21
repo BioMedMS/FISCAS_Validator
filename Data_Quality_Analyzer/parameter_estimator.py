@@ -6,7 +6,7 @@ import threading
 import matplotlib.pyplot as plt
 
 from canvas_generation import generate_msi_from_mask_slice
-from error_estimation import sum_abs_diff
+from error_estimation import sum_abs_diff, mean_absolute_percentage_error
 
 def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
     scaling_factor = int(mask.shape[0] / msi.shape[0])
@@ -51,169 +51,121 @@ def get_cell_neighbourhood(canvas, cell_index, padding, scaling_factor):
         last_collumn = canvas.shape[1] - 1
 
     left = int(max(first_collumn - first_collumn % scaling_factor - padding * scaling_factor, 0))
-    right = int(min(last_collumn - last_collumn % scaling_factor + padding * scaling_factor, canvas.shape[1] - 1))
     top = int(max(first_row - first_row % scaling_factor - padding * scaling_factor, 0))
-    bottom = int(min(last_row - last_row % scaling_factor + padding * scaling_factor, canvas.shape[0] - 1))
-    return (canvas[top:bottom, left:right], (left, right, top, bottom))
+
+    right = int(min(
+        last_collumn - last_collumn % scaling_factor + padding * scaling_factor + scaling_factor,
+        canvas.shape[1]
+    ))
+    bottom = int(min(
+        last_row - last_row % scaling_factor + padding * scaling_factor + scaling_factor,
+        canvas.shape[0]
+    ))
+
+    return canvas[top:bottom, left:right], (left, right, top, bottom)
 
 def get_individual_cell_canvases(mask, msi_canvas, scaling_factor, padding):
+    scaling_factor = int(scaling_factor)
+
     cell_indexes = np.unique(mask)
     cell_indexes = cell_indexes[cell_indexes != 0]
     masks = []
     targets = []
 
     for index in cell_indexes:
-        crop = get_cell_neighbourhood(mask, index, padding, scaling_factor)
-        masks.append(crop[0])
-        left, right, top, bottom = tuple([round(x / scaling_factor) for x in crop[1]])
+        crop_mask, (left_hr, right_hr, top_hr, bottom_hr) = get_cell_neighbourhood(
+            mask, index, padding, scaling_factor
+        )
+        masks.append(crop_mask)
+
+        left = left_hr // scaling_factor
+        right = right_hr // scaling_factor
+        top = top_hr // scaling_factor
+        bottom = bottom_hr // scaling_factor
+
         targets.append(msi_canvas[top:bottom, left:right])
 
-    return masks, targets
+    return cell_indexes, masks, targets
 
-def optimize_cell_neighbourhood(sigmas,
-                                intensities,
-                                cell_index,
-                                diffusion_total_time,
-                                diffusion_coefficient,
-                                diffusion_barrier_alpha,
-                                canvas,
-                                target,
-                                scaling_factor):
-    result = minimize(
-        objective_cell_params,
-        x0=[sigmas[cell_index - 1], intensities[cell_index - 1]],
-        args=(
-            cell_index,
-            canvas,
-            target,
-            sigmas,
-            intensities,
-            diffusion_total_time,
-            diffusion_coefficient,
-            diffusion_barrier_alpha,
-            scaling_factor,
-        ),
-        method="Nelder-Mead",
-        bounds=[(sigmas[cell_index - 1]-100, sigmas[cell_index - 1]+100), (intensities[cell_index - 1]-100, intensities[cell_index - 1]+100)],
-    )
-    return result.x
+def parallel_sigma_optimisation(cell_indexes, cell_masks, cell_targets, sigmas, intensities, scaling_factor):
+    with ThreadPoolExecutor(max_workers=12) as executor:
+        futures = [
+            executor.submit(
+                optimize_single_sigma,
+                i,
+                cell_indexes,
+                cell_masks,
+                cell_targets,
+                sigmas,
+                intensities,
+                scaling_factor
+            )
+            for i in range(len(cell_indexes))
+        ]
 
-def objective_cell_params(params,
-                          cell_index,
-                          mask_slice,
-                          target_slice,
-                          global_sigmas,
-                          global_intensities,
-                          diffusion_total_time,
-                          diffusion_coefficient,
-                          diffusion_barrier_alpha,
-                          scaling_factor):
-    sigma, intensity = params
+        optimized_sigmas = list(sigmas)
+        for i, f in enumerate(futures):
+            optimized_sigmas[i] = f.result()
 
-    sigmas = global_sigmas.copy()
-    intensities = global_intensities.copy()
+    return optimized_sigmas
 
-    sigmas[cell_index - 1] = sigma
-    intensities[cell_index - 1] = intensity
 
-    generated = generate_msi_from_mask_slice(
-        mask_slice,
-        sigmas,
-        intensities,
-        diffusion_total_time,
-        diffusion_coefficient,
-        diffusion_barrier_alpha,
-        ms_spacing=scaling_factor,
-    )
-    error = sum_abs_diff(target_slice, generated)
-    return error
+def optimize_single_sigma(i, cell_indexes, cell_masks, cell_targets, sigmas, intensities, scaling_factor):
+    local_cell_ids = np.unique(cell_masks[i])
+    local_cell_ids = local_cell_ids[local_cell_ids > 0]
 
-def optimize_one_cell_from_snapshot(i,
-                                    sigmas_snapshot,
-                                    intensities_snapshot,
-                                    diffusion_total_time,
-                                    diffusion_coefficient,
-                                    diffusion_barrier_alpha,
-                                    cell_mask,
-                                    cell_target,
-                                    scaling_factor):
-    sigma, intensity = optimize_cell_neighbourhood(
-        sigmas_snapshot,
-        intensities_snapshot,
-        i + 1,
-        diffusion_total_time,
-        diffusion_coefficient,
-        diffusion_barrier_alpha,
-        cell_mask,
-        cell_target,
-        scaling_factor,
-    )
-    return i, sigma, intensity
+    global_pos = {cell_id: j for j, cell_id in enumerate(cell_indexes)}
 
-def parallel_optimize_cells(sigmas,
-                            intensities,
-                            number_of_cells,
-                            cell_masks,
-                            cell_targets,
-                            diffusion_total_time,
-                            diffusion_coefficient,
-                            diffusion_barrier_alpha,
-                            scaling_factor,
-                            max_workers=4):
-    state_lock = threading.Lock()
+    local_sigmas = [sigmas[global_pos[cell_id]] for cell_id in local_cell_ids]
+    local_intensities = [intensities[global_pos[cell_id]] for cell_id in local_cell_ids]
 
-    def submit_job(executor, i):
-        with state_lock:
-            sigmas_snapshot = sigmas.copy()
-            intensities_snapshot = intensities.copy()
+    target_cell_id = cell_indexes[i]
+    target_local_idx = np.where(local_cell_ids == target_cell_id)[0][0]
 
-        future = executor.submit(
-            optimize_one_cell_from_snapshot,
-            i,
-            sigmas_snapshot,
-            intensities_snapshot,
-            diffusion_total_time,
-            diffusion_coefficient,
-            diffusion_barrier_alpha,
+    step = max(1, int(round(scaling_factor / 2)))
+    max_sigma = max(1, int(sigmas[i]))
+    sigma_trials = range(1, max_sigma + 1, step)
+
+    best_sigma = local_sigmas[target_local_idx]
+
+    best_score = mean_absolute_percentage_error(
+        cell_targets[i],
+        generate_msi_from_mask_slice(
             cell_masks[i],
-            cell_targets[i],
-            scaling_factor,
+            local_sigmas,
+            local_intensities,
+            0,
+            0,
+            0,
+            ms_spacing=scaling_factor
         )
-        return future
+    )
 
-    next_index = 0
-    running = {}
+    for sigma in sigma_trials:
+        trial_sigmas = list(local_sigmas)
+        trial_sigmas[target_local_idx] = sigma
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        while next_index < number_of_cells and len(running) < max_workers:
-            future = submit_job(executor, next_index)
-            running[future] = next_index
-            print(f"submitted {next_index}")
-            next_index += 1
+        score = mean_absolute_percentage_error(
+            cell_targets[i],
+            generate_msi_from_mask_slice(
+                cell_masks[i],
+                trial_sigmas,
+                local_intensities,
+                0,
+                0,
+                0,
+                ms_spacing=scaling_factor
+            )
+        )
 
-        while running:
-            done, _ = wait(running.keys(), return_when=FIRST_COMPLETED)
+        if score < best_score:
+            best_score = score
+            best_sigma = sigma
 
-            for future in done:
-                submitted_i = running.pop(future)
-                i, sigma, intensity = future.result()
-
-                with state_lock:
-                    sigmas[i] = sigma
-                    intensities[i] = intensity
-
-                print(f"finished {i}")
-
-                if next_index < number_of_cells:
-                    new_future = submit_job(executor, next_index)
-                    running[new_future] = next_index
-                    print(f"submitted {next_index}")
-                    next_index += 1
-
-    return sigmas, intensities
+    return best_sigma
 
 def apply_noise_model(canvas, target):
-    r = (canvas - target)
+    r = target - canvas
     shape = r.shape
     r_flat = r.ravel()
     mu = r_flat.mean()
@@ -224,7 +176,7 @@ def apply_noise_model(canvas, target):
     g_assigned = np.empty_like(g)
     g_assigned[idx] = g_sorted
     g_assigned = g_assigned.reshape(shape)
-    result = target + g_assigned
+    result = canvas + g_assigned
     return result
 
 if __name__ == "__main__":
@@ -232,24 +184,39 @@ if __name__ == "__main__":
     canvas = np.load("input/msi_data.npy")[:, :, 500]
     p = np.percentile(canvas, 99)
     canvas = np.clip(canvas, 0, p)
-    mask, canvas = crop_canvas_and_msi(mask, canvas, 70, 70, 70, 70)
+    mask, canvas = crop_canvas_and_msi(mask, canvas, 110, 100, 100, 100)
+    
+    #plot mask
+    fig, ax = plt.subplots()
+    cax = ax.imshow(mask, cmap='viridis', aspect='auto')
+    fig.colorbar(cax, ax=ax)
+    ax.set_title("Cell masks")
+    plt.savefig("output/mask.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
 
-    plt.imshow(canvas, interpolation="none")
-    plt.show()
+    #plot mask
+    fig, ax = plt.subplots()
+    cax = ax.imshow(canvas, cmap='viridis', aspect='auto')
+    fig.colorbar(cax, ax=ax)
+    ax.set_title("Cell masks")
+    plt.savefig("output/target_canvas.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
 
-    scaling_factor = mask.shape[0] / canvas.shape[0]
+    scaling_factor = mask.shape[0] // canvas.shape[0]
     diffusion_total_time = 0
     diffusion_coefficient = 0
     diffusion_barrier_alpha = 0
 
-    cell_masks, cell_targets = get_individual_cell_canvases(mask, canvas, scaling_factor, 2)
+    cell_indexes, cell_masks, cell_targets = get_individual_cell_canvases(mask, canvas, scaling_factor, 2)
     number_of_cells = len(cell_masks)
 
     sigmas = []
     intensities = []
-    for cell_target in cell_targets:
-        intensities.append(int(np.max(cell_target)))
-        sigmas.append(round(cell_target.shape[0])*scaling_factor)
+    for i, cell_target in enumerate(cell_targets):
+        target_hr = np.repeat(np.repeat(cell_target, scaling_factor, axis=0), scaling_factor, axis=1)
+        mask_i = (cell_masks[i] == cell_indexes[i])
+        intensities.append(float(target_hr[mask_i].sum()) / (scaling_factor * scaling_factor))
+        sigmas.append(cell_targets[i].shape[0]*scaling_factor)
     generated = generate_msi_from_mask_slice(
         mask,
         sigmas,
@@ -257,23 +224,25 @@ if __name__ == "__main__":
         diffusion_total_time,
         diffusion_coefficient,
         diffusion_barrier_alpha,
-        ms_spacing=scaling_factor,
+        ms_spacing=scaling_factor
     )
-    plt.imshow(generated, interpolation="none")
-    plt.show()
 
-    sigmas, intensities = parallel_optimize_cells(
-        sigmas=sigmas,
-        intensities=intensities,
-        number_of_cells=number_of_cells,
-        cell_masks=cell_masks,
-        cell_targets=cell_targets,
-        diffusion_total_time=diffusion_total_time,
-        diffusion_coefficient=diffusion_coefficient,
-        diffusion_barrier_alpha=diffusion_barrier_alpha,
-        scaling_factor=scaling_factor,
-        max_workers=12,  
-    )
+    mape_initial = mean_absolute_percentage_error(canvas, generated)
+
+    # Plot comparison of target vs initial config
+    vmin = min(canvas.min(), generated.min())
+    vmax = max(canvas.max(), generated.max())
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+    im1 = axes[0].imshow(canvas, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    im2 = axes[1].imshow(generated, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    axes[0].set_title("Target")
+    axes[1].set_title("Simulation")
+    fig.suptitle(f"Initial comparison | MAPE-like score: {mape_initial:.6f}")
+    cbar = fig.colorbar(im1, ax=axes, location='right', shrink=0.9)
+    plt.savefig("output/target_v_initial.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+    sigmas = parallel_sigma_optimisation(cell_indexes, cell_masks, cell_targets, sigmas, intensities, scaling_factor)
 
     generated = generate_msi_from_mask_slice(
         mask,
@@ -282,12 +251,37 @@ if __name__ == "__main__":
         diffusion_total_time,
         diffusion_coefficient,
         diffusion_barrier_alpha,
-        ms_spacing=scaling_factor,
+        ms_spacing=scaling_factor
     )
-    
-    plt.imshow(generated, interpolation="none")
-    plt.show()
+
+    mape_optimized = mean_absolute_percentage_error(canvas, generated)
+
+    # Plot comparison of target vs optimized config
+    vmin = min(canvas.min(), generated.min())
+    vmax = max(canvas.max(), generated.max())
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+    im1 = axes[0].imshow(canvas, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    im2 = axes[1].imshow(generated, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    axes[0].set_title("Target")
+    axes[1].set_title("Simulation")
+    fig.suptitle(f"Optimized comparison | MAPE-like score: {mape_optimized:.6f}")
+    cbar = fig.colorbar(im1, ax=axes, location='right', shrink=0.9)
+    plt.savefig("output/target_v_optimized.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
 
     generated = apply_noise_model(generated, canvas)
-    plt.imshow(generated, interpolation="none")
-    plt.show()
+
+    mape_optimized = mean_absolute_percentage_error(canvas, generated)
+
+    # Plot comparison of target vs optimized config
+    vmin = min(canvas.min(), generated.min())
+    vmax = max(canvas.max(), generated.max())
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+    im1 = axes[0].imshow(canvas, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    im2 = axes[1].imshow(generated, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    axes[0].set_title("Target")
+    axes[1].set_title("Simulation")
+    fig.suptitle(f"Optimized comparison | MAPE-like score: {mape_optimized:.6f}")
+    cbar = fig.colorbar(im1, ax=axes, location='right', shrink=0.9)
+    plt.savefig("output/target_v_optimized_plus_noise.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
