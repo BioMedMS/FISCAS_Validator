@@ -1,3 +1,4 @@
+import math
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize
@@ -6,14 +7,13 @@ import threading
 import matplotlib.pyplot as plt
 
 from canvas_generation import generate_msi_from_mask_slice
-from error_estimation import sum_abs_diff, mean_absolute_percentage_error
+from diffusion_estimator import estimate_diffusion_parameter, estimate_mu_from_distribution
+from error_estimation import sum_abs_diff, symmetric_l1_ratio
 
 def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
     scaling_factor = int(mask.shape[0] / msi.shape[0])
-    print(scaling_factor)
     new_mask = mask[left*scaling_factor:mask.shape[0]-right*scaling_factor, top*scaling_factor:mask.shape[1]-bottom*scaling_factor]
-    new_msi = msi[left:msi.shape[0]-right, top:msi.shape[1]-bottom]
-    print(new_msi)
+    new_msi = msi[left:msi.shape[0]-right, top:msi.shape[1]-bottom,:]
     return new_mask, new_msi
 
 def get_cell_neighbourhood(canvas, cell_index, padding, scaling_factor):
@@ -128,7 +128,7 @@ def optimize_single_sigma(i, cell_indexes, cell_masks, cell_targets, sigmas, int
 
     best_sigma = local_sigmas[target_local_idx]
 
-    best_score = mean_absolute_percentage_error(
+    best_score = symmetric_l1_ratio(
         cell_targets[i],
         generate_msi_from_mask_slice(
             cell_masks[i],
@@ -145,7 +145,7 @@ def optimize_single_sigma(i, cell_indexes, cell_masks, cell_targets, sigmas, int
         trial_sigmas = list(local_sigmas)
         trial_sigmas[target_local_idx] = sigma
 
-        score = mean_absolute_percentage_error(
+        score = symmetric_l1_ratio(
             cell_targets[i],
             generate_msi_from_mask_slice(
                 cell_masks[i],
@@ -180,34 +180,38 @@ def apply_noise_model(canvas, target):
     return result
 
 if __name__ == "__main__":
+    channels_to_show = range(99,148)
     mask = np.load("input/seg.npy").astype(np.int32)
-    canvas = np.load("input/msi_data.npy")[:, :, 500]
-    p = np.percentile(canvas, 99)
-    canvas = np.clip(canvas, 0, p)
-    mask, canvas = crop_canvas_and_msi(mask, canvas, 110, 100, 100, 100)
-    
-    #plot mask
-    fig, ax = plt.subplots()
-    cax = ax.imshow(mask, cmap='viridis', aspect='auto')
-    fig.colorbar(cax, ax=ax)
-    ax.set_title("Cell masks")
-    plt.savefig("output/mask.png", dpi=300, bbox_inches='tight')
-    plt.close(fig)
+    msi = np.load("input/msi_data.npy")
+    p = np.percentile(msi, 99, axis=(0, 1), keepdims=True)
+    msi = np.clip(msi, 0, p)
+    mask, msi = crop_canvas_and_msi(mask, msi, 110, 110, 100, 100)
+    print("we got here")
 
     #plot mask
-    fig, ax = plt.subplots()
-    cax = ax.imshow(canvas, cmap='viridis', aspect='auto')
-    fig.colorbar(cax, ax=ax)
-    ax.set_title("Cell masks")
-    plt.savefig("output/target_canvas.png", dpi=300, bbox_inches='tight')
+    n = len(channels_to_show)
+    ncols = math.ceil(math.sqrt(n))
+    nrows = math.ceil(n / ncols)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 4 * nrows), squeeze=False)
+    for ax, ch in zip(axes.flat, channels_to_show):
+        im = ax.imshow(msi[:, :, ch], cmap="viridis", aspect="auto")
+        ax.set_title(f"Channel {ch}")
+        ax.axis("off")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+    # Hide unused panels
+    for ax in axes.flat[n:]:
+        ax.axis("off")
+    fig.suptitle("Cell masks", fontsize=16)
+    fig.tight_layout()
+    plt.savefig("output/target_msi.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    scaling_factor = mask.shape[0] // canvas.shape[0]
+    scaling_factor = mask.shape[0] // msi.shape[0]
     diffusion_total_time = 0
     diffusion_coefficient = 0
     diffusion_barrier_alpha = 0
 
-    cell_indexes, cell_masks, cell_targets = get_individual_cell_canvases(mask, canvas, scaling_factor, 2)
+    cell_indexes, cell_masks, cell_targets = get_individual_cell_canvases(mask, msi, scaling_factor, 2)
     number_of_cells = len(cell_masks)
 
     sigmas = []
@@ -227,20 +231,23 @@ if __name__ == "__main__":
         ms_spacing=scaling_factor
     )
 
-    mape_initial = mean_absolute_percentage_error(canvas, generated)
+    mape_initial = symmetric_l1_ratio(msi, generated)
 
     # Plot comparison of target vs initial config
-    vmin = min(canvas.min(), generated.min())
-    vmax = max(canvas.max(), generated.max())
+    vmin = min(msi.min(), generated.min())
+    vmax = max(msi.max(), generated.max())
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-    im1 = axes[0].imshow(canvas, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    im1 = axes[0].imshow(msi, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
     im2 = axes[1].imshow(generated, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
     axes[0].set_title("Target")
     axes[1].set_title("Simulation")
-    fig.suptitle(f"Initial comparison | MAPE-like score: {mape_initial:.6f}")
+    fig.suptitle(f"Initial comparison | Symmetric L1 Ratio: {mape_initial:.6f}")
     cbar = fig.colorbar(im1, ax=axes, location='right', shrink=0.9)
     plt.savefig("output/target_v_initial.png", dpi=300, bbox_inches='tight')
     plt.close(fig)
+
+    print(estimate_mu_from_distribution(np.kron(msi, np.ones((scaling_factor, scaling_factor), dtype=msi.dtype)), mask))
+    print(estimate_diffusion_parameter(msi, generated, mask, scaling_factor))
 
     sigmas = parallel_sigma_optimisation(cell_indexes, cell_masks, cell_targets, sigmas, intensities, scaling_factor)
 
@@ -254,34 +261,53 @@ if __name__ == "__main__":
         ms_spacing=scaling_factor
     )
 
-    mape_optimized = mean_absolute_percentage_error(canvas, generated)
+    print("optimize cell parameters...")
+
+    mape_optimized = symmetric_l1_ratio(msi, generated)
 
     # Plot comparison of target vs optimized config
-    vmin = min(canvas.min(), generated.min())
-    vmax = max(canvas.max(), generated.max())
+    vmin = min(msi.min(), generated.min())
+    vmax = max(msi.max(), generated.max())
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-    im1 = axes[0].imshow(canvas, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    im1 = axes[0].imshow(msi, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
     im2 = axes[1].imshow(generated, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
     axes[0].set_title("Target")
     axes[1].set_title("Simulation")
-    fig.suptitle(f"Optimized comparison | MAPE-like score: {mape_optimized:.6f}")
+    fig.suptitle(f"Optimized comparison | Symmetric L1 Ratio: {mape_optimized:.6f}")
     cbar = fig.colorbar(im1, ax=axes, location='right', shrink=0.9)
     plt.savefig("output/target_v_optimized.png", dpi=300, bbox_inches='tight')
     plt.close(fig)
 
-    generated = apply_noise_model(generated, canvas)
+    print("optimize diffusion parameters...")
 
-    mape_optimized = mean_absolute_percentage_error(canvas, generated)
+    mape_optimized = symmetric_l1_ratio(msi, generated)
 
     # Plot comparison of target vs optimized config
-    vmin = min(canvas.min(), generated.min())
-    vmax = max(canvas.max(), generated.max())
+    vmin = min(msi.min(), generated.min())
+    vmax = max(msi.max(), generated.max())
     fig, axes = plt.subplots(1, 2, figsize=(8, 4))
-    im1 = axes[0].imshow(canvas, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    im1 = axes[0].imshow(msi, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
     im2 = axes[1].imshow(generated, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
     axes[0].set_title("Target")
     axes[1].set_title("Simulation")
-    fig.suptitle(f"Optimized comparison | MAPE-like score: {mape_optimized:.6f}")
+    fig.suptitle(f"Optimized comparison | Symmetric L1 Ratio: {mape_optimized:.6f}")
+    cbar = fig.colorbar(im1, ax=axes, location='right', shrink=0.9)
+    plt.savefig("output/target_v_optimized_plus_diffusion.png", dpi=300, bbox_inches='tight')
+    plt.close(fig)
+
+    generated = apply_noise_model(generated, msi)
+
+    mape_optimized = symmetric_l1_ratio(msi, generated)
+
+    # Plot comparison of target vs optimized config
+    vmin = min(msi.min(), generated.min())
+    vmax = max(msi.max(), generated.max())
+    fig, axes = plt.subplots(1, 2, figsize=(8, 4))
+    im1 = axes[0].imshow(msi, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    im2 = axes[1].imshow(generated, cmap='viridis', vmin=vmin, vmax=vmax, aspect='auto')
+    axes[0].set_title("Target")
+    axes[1].set_title("Simulation")
+    fig.suptitle(f"Optimized comparison | Symmetric L1 Ratio: {mape_optimized:.6f}")
     cbar = fig.colorbar(im1, ax=axes, location='right', shrink=0.9)
     plt.savefig("output/target_v_optimized_plus_noise.png", dpi=300, bbox_inches='tight')
     plt.close(fig)

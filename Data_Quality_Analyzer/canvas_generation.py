@@ -156,11 +156,11 @@ def generate_msi_from_mask_slice(
     diffusion_coefficient,
     diffusion_barrier_alpha,
     mic_spacing=1.0,
-    diffusion_dt=0,
     leaky_outer_boundary=True,
     use_gpu=True,
     ms_spacing=None,
 ):
+    diffusion_dt = diffusion_total_time / 10
     cell_ids = np.unique(mask_slice)
     cell_ids = cell_ids[cell_ids > 0]
 

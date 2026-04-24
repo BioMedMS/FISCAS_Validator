@@ -1,164 +1,74 @@
 import numpy as np
-from scipy.optimize import least_squares
+from canvas_generation import diffuse_mask_2d
 
-def _build_strip_laplacian(n, barrier_pos, alpha):
-    """
-    1D-Streifen-Laplacian für n Felder und genau eine Barriere.
+def estimate_diffusion_parameter(msi, msi_generated, canvas, scaling_factor):
+    signal_leaked = []
+    for i, bin in enumerate(msi):
+        total_signal_gt = np.sum(bin)
+        total_signal_sim = np.sum(msi_generated[:,:,i])
+        leaked_signal_percentage = (total_signal_gt-total_signal_sim)/total_signal_gt
+        if leaked_signal_percentage >= 0.5:
+            signal_leaked.append(1)
+        else:
+            signal_leaked.append(leaked_signal_percentage*2)
+    
+    return signal_leaked
 
-    Parameters
-    ----------
-    n : int
-        Anzahl der Felder im Streifen.
-    barrier_pos : int
-        Position der Barriere als 1-basierter Kantenindex:
-        1 bedeutet zwischen Feld 1 und 2,
-        2 bedeutet zwischen Feld 2 und 3,
-        ...
-        n-1 bedeutet zwischen Feld n-1 und n.
-    alpha : float
-        Barrier-Gewicht auf der Barrierenkante.
-        Alle anderen Kanten haben Gewicht 1.
+    for i, bin in enumerate(msi):
+        bin_generated = msi_generated[i]
+        mu_candidates = []
+        while mu_candidates:
+            pass
 
-    Returns
-    -------
-    L : (n, n) ndarray- wenn auch nicht immer mit gleichem Bedacht und Erfolg.
-        Gewichteter 1D-Laplacian.
-    """
-    if n < 2:
-        raise ValueError("n must be at least 2.")
-    if not (1 <= barrier_pos <= n - 1):
-        raise ValueError(f"barrier_pos must be in [1, {n-1}].")
+def estimate_mu_from_distribution(distribution, patch_mask, eps=1e-12):
+    u = np.asarray(distribution, dtype=float)
+    mask = np.asarray(patch_mask, dtype=bool)
 
-    # Kantengewichte beta_1, ..., beta_{n-1}
-    beta = np.ones(n - 1, dtype=float)
-    beta[barrier_pos - 1] = alpha
+    if u.ndim != 2:
+        raise ValueError("distribution must be a 2D array.")
+    if mask.shape != u.shape:
+        raise ValueError("patch_mask must have the same shape as distribution.")
+    if mask.all() or (~mask).all():
+        raise ValueError("patch_mask must contain both patch and background cells.")
 
-    L = np.zeros((n, n), dtype=float)
+    n, m = u.shape
 
-    for i in range(n - 1):
-        w = beta[i]
-        L[i, i] += w
-        L[i + 1, i + 1] += w
-        L[i, i + 1] -= w
-        L[i + 1, i] -= w
+    patch_values = u[mask]
+    background_values = u[~mask]
 
-    return L
+    patch_mean = patch_values.mean()
+    background_mean = background_values.mean()
+    global_mean = u.mean()
 
+    contrast_remaining = abs(patch_mean - background_mean)
 
-def _predict_left_value(strip_data, barrier_pos, alpha, mu):
-    """
-    Vorhersage des linken Werts nach genau einem impliziten Euler-Schritt.
+    patch_fraction = mask.mean()
 
-    strip_data ist ein 1D-Array:
-        [u0_1, u0_2, ..., u0_n, target]
+    if patch_fraction <= eps:
+        raise ValueError("Patch fraction is too small.")
 
-    Der letzte Eintrag ist der beobachtete target-Wert und wird hier
-    nur abgeschnitten; für die Vorhersage werden die ersten n Einträge
-    als Anfangsverteilung verwendet.
-    """
-    strip_data = np.asarray(strip_data, dtype=float)
-    if strip_data.ndim != 1:
-        raise ValueError("Each strip must be a 1D array.")
-    if strip_data.size < 3:
-        raise ValueError("Each strip must contain at least 2 initial values + 1 target.")
+    z_est = global_mean / patch_fraction
+    contrast_initial_est = abs(z_est - 0.0)
 
-    u0 = strip_data[:-1]
-    n = u0.size
+    if contrast_initial_est <= eps:
+        raise ValueError("Initial contrast estimate is zero or too small.")
 
-    L = _build_strip_laplacian(n=n, barrier_pos=barrier_pos, alpha=alpha)
-    A = np.eye(n, dtype=float) + mu * L
-    u1 = np.linalg.solve(A, u0)
+    r = contrast_remaining / contrast_initial_est
+    r = np.clip(r, eps, 1.0)
 
-    # linker Wert nach einem Schritt
-    return u1[0]
+    lambda_1 = (np.pi ** 2) / (max(n, m) ** 2)
 
+    mu_est = (1.0 - r) / (r * lambda_1)
 
-def _residuals(params, strips, barrier_positions):
-    """
-    Residuenvektor für least squares:
-        r_s(alpha, mu) = predicted_left_value_s - target_s
-    """
-    alpha, mu = params
-
-    residuals = []
-    for strip_data, barrier_pos in zip(strips, barrier_positions):
-        strip_data = np.asarray(strip_data, dtype=float)
-        target = strip_data[-1]
-        pred = _predict_left_value(strip_data, barrier_pos, alpha, mu)
-        residuals.append(pred - target)
-
-    return np.asarray(residuals, dtype=float)
-
-
-def fit_alpha_mu(strips, barrier_positions, alpha0=0.5, mu0=1.0,
-                 alpha_bounds=(0.0, 1.0), mu_bounds=(0.0, np.inf)):
-    """
-    Schätzt alpha und mu aus mehreren Streifen per least squares.
-
-    Modellannahme:
-        - 1D-Streifen
-        - genau ein impliziter Euler-Schritt
-        - mu = t * k
-        - genau eine Barriere pro Streifen
-        - Messwert ist der linke Wert nach dem Schritt
-
-    Parameters
-    ----------
-    strips : list of 1D ndarray
-        Jeder Eintrag ist ein 1D-Array gleicher Länge:
-            [u0_1, u0_2, ..., u0_n, target]
-        Die ersten n Werte sind die Anfangsverteilung,
-        der letzte Wert ist der beobachtete Target-Wert links.
-    barrier_positions : list of int
-        Barriereposition pro Streifen, in derselben Reihenfolge wie `strips`.
-        1-basiert:
-            1 = Barriere zwischen Feld 1 und 2
-            ...
-            n-1 = Barriere zwischen Feld n-1 und n
-    alpha0 : float
-        Startwert für alpha.
-    mu0 : float
-        Startwert für mu.
-    alpha_bounds : tuple(float, float)
-        Schranken für alpha.
-    mu_bounds : tuple(float, float)
-        Schranken für mu.
-
-    Returns
-    -------
-    alpha_hat : float
-    mu_hat : float
-    result : scipy.optimize.OptimizeResult
-        Vollständiges least_squares-Ergebnis.
-    """
-    if len(strips) == 0:
-        raise ValueError("strips must not be empty.")
-    if len(strips) != len(barrier_positions):
-        raise ValueError("strips and barrier_positions must have the same length.")
-
-    strips = [np.asarray(s, dtype=float) for s in strips]
-
-    lengths = {s.size for s in strips}
-    if len(lengths) != 1:
-        raise ValueError("All strip arrays must have the same length.")
-
-    n = strips[0].size - 1
-    if n < 2:
-        raise ValueError("Need at least 2 fields per strip.")
-
-    for b in barrier_positions:
-        if not (1 <= b <= n - 1):
-            raise ValueError(f"Each barrier position must be in [1, {n-1}].")
-
-    lower = [alpha_bounds[0], mu_bounds[0]]
-    upper = [alpha_bounds[1], mu_bounds[1]]
-
-    result = least_squares(
-        _residuals,
-        x0=np.array([alpha0, mu0], dtype=float),
-        bounds=(lower, upper),
-        args=(strips, barrier_positions),
-    )
-
-    alpha_hat, mu_hat = result.x
-    return float(alpha_hat), float(mu_hat), result
+    return {
+        "mu_est": mu_est,
+        "r": r,
+        "lambda_1": lambda_1,
+        "n": n,
+        "m": m,
+        "patch_mean": patch_mean,
+        "background_mean": background_mean,
+        "global_mean": global_mean,
+        "contrast_remaining": contrast_remaining,
+        "contrast_initial_est": contrast_initial_est,
+    }
