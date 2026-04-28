@@ -14,12 +14,10 @@ def csv_test(filepath):
     if np.isnan(X).any():
         raise ValueError("CSV contains non-numeric values beyond the header.")
 
-    selected_idx, selected_matrix = sample_by_morphology(X)
+    selected_idx = sample_by_morphology(X)
 
     print("Selected indices:")
     print(selected_idx)
-    print("Selected samples:")
-    print(selected_matrix)
 
 def _shrink_cov(cov: np.ndarray, alpha: float) -> np.ndarray:
     d = np.diag(np.diag(cov))
@@ -44,8 +42,9 @@ def greedy_step_add(
     xxT = Xc[:, :, None] * Xc[:, None, :]
     cov2 = (sum_xxT[None, :, :] + xxT) / n2 - (mu2[:, :, None] * mu2[:, None, :])
 
-    diag2 = np.einsum("mii,ij->mij", cov2, np.eye(cov2.shape[1], dtype=cov2.dtype))
-    cov2a = (1.0 - alpha) * cov2 + alpha * diag2
+    cov2a = (1.0 - alpha) * cov2
+    idx = np.arange(cov2.shape[1])
+    cov2a[:, idx, idx] += alpha * cov2[:, idx, idx]
 
     dmu = mu2 - mu_full[None, :]
     mu_term = np.einsum("mi,mi->m", dmu, dmu)
@@ -95,11 +94,11 @@ def sample_by_morphology(morphology_array):
     L = gaussian_preservation_error(sum_x / n, cov, mu, Sigma, alpha, lam)
 
     while L > tol and n < max_n:
-        print(str(L) + ">" + str(tol))
-        print(str(n) + "/" + str(max_n))
-        print("-------------")
         remaining = np.flatnonzero(~in_sel)
-        best_idx, best_L = greedy_step_add(X, remaining, sum_x, sum_xxT, n, mu, Sigma_a, alpha, lam)
+        best_idx, best_L = greedy_step_add(
+            X, remaining, sum_x, sum_xxT, n, mu, Sigma_a, alpha, lam
+        )
+
         x = X[best_idx]
         selected.append(best_idx)
         in_sel[best_idx] = True
@@ -110,8 +109,7 @@ def sample_by_morphology(morphology_array):
         cov = sum_xxT / n - np.outer(sum_x / n, sum_x / n)
         L = gaussian_preservation_error(sum_x / n, cov, mu, Sigma, alpha, lam)
 
-    selected = np.array(selected, dtype=int)
-    return selected, X[selected]
+    return np.array(selected, dtype=int)
 
 def gaussian_preservation_error(mu_s, sigma_s, mu, sigma, alpha: float, lam: float) -> float:
     mu_s = np.asarray(mu_s, dtype=np.float64)
