@@ -6,6 +6,7 @@
 /Data_Quality_Analyzer/input
 /reports
 /textures
+Data_Quality_Analyzer/input
 *test*.py
 *test*.ipynb
 *test*.qmd
