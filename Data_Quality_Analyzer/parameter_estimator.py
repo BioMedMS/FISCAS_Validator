@@ -38,14 +38,6 @@ def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
 
 
 def get_cell_bounding_boxes(mask):
-    """
-    Much faster than scanning every row/column for every cell.
-
-    Returns:
-        cell_ids: np.ndarray of positive cell IDs.
-        boxes: dict mapping cell_id -> (top, bottom, left, right),
-            where bottom/right are exclusive.
-    """
     cell_ids = np.unique(mask)
     cell_ids = cell_ids[cell_ids > 0]
 
@@ -122,9 +114,6 @@ def get_individual_cell_canvases(mask, msi_canvas, scaling_factor, padding):
 
 
 def block_fraction_from_hr_mask(mask_i, scaling_factor, target_shape):
-    """
-    Computes the fraction of each MSI pixel covered by the high-res cell mask.
-    """
     sf = int(scaling_factor)
 
     h_hr, w_hr = mask_i.shape
@@ -187,10 +176,6 @@ def build_initial_sigmas_and_intensities(
 
 
 def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor):
-    """
-    Render a single labeled cell inside a high-res local mask crop and reduce it
-    to MSI resolution. Used by the fast sigma optimizer.
-    """
     sf = int(scaling_factor)
 
     coords = np.argwhere(cell_mask == cell_id)
@@ -253,12 +238,6 @@ def optimize_single_sigma(
     scaling_factor,
     global_pos,
 ):
-    """
-    Optimized sigma search.
-
-    This renders all local cells once, keeps neighbor contribution fixed,
-    and re-renders only the target cell for each sigma trial.
-    """
     local_cell_ids = np.unique(cell_masks[i])
     local_cell_ids = local_cell_ids[local_cell_ids > 0]
 
@@ -412,7 +391,20 @@ def scale_intensities_to_target_totals(intensities, msi):
     return intensities
 
 
-def estimate_channel_mus(msi, mask, scaling_factor, num_channels):
+def estimate_channel_mus(
+    msi,
+    mask,
+    scaling_factor,
+    num_channels,
+    diffusion_estimation_power=2.0,
+    diffusion_inner_boundary_px=2,
+    diffusion_outer_boundary_px=2,
+    diffusion_far_background_inner_px=8,
+    diffusion_far_background_outer_px=20,
+    diffusion_intracellular_fraction=0.25,
+    diffusion_min_cell_pixels=5,
+    diffusion_max_mu=None,
+):
     mus = []
 
     for c in range(num_channels):
@@ -422,10 +414,30 @@ def estimate_channel_mus(msi, mask, scaling_factor, num_channels):
             axis=1,
         )
 
-        mu_c = estimate_mu_from_distribution(msi_hr_c, mask)
+        mu_c = estimate_mu_from_distribution(
+            distribution=msi_hr_c,
+            patch_mask=mask,
+            estimation_power=diffusion_estimation_power,
+            inner_boundary_px=diffusion_inner_boundary_px,
+            outer_boundary_px=diffusion_outer_boundary_px,
+            far_background_inner_px=diffusion_far_background_inner_px,
+            far_background_outer_px=diffusion_far_background_outer_px,
+            intracellular_diffusion_fraction=diffusion_intracellular_fraction,
+            min_cell_pixels=diffusion_min_cell_pixels,
+            max_mu=diffusion_max_mu,
+        )
+
         mus.append(mu_c)
 
     return mus
+
+
+def _value_for_channel(values, c):
+    if np.isscalar(values):
+        return float(values)
+
+    values = list(values)
+    return float(values[c])
 
 
 def make_channel_generator(
@@ -434,7 +446,7 @@ def make_channel_generator(
     intensities,
     diffusion_total_times,
     diffusion_coefficients,
-    diffusion_barrier_alpha,
+    diffusion_barrier_alphas,
     scaling_factor,
     diffusion_downsample=8,
     max_sigma_lowres=15.0,
@@ -444,9 +456,9 @@ def make_channel_generator(
             mask_slice=mask,
             sigmas=sigmas[c],
             intensities=intensities[c],
-            diffusion_total_time=diffusion_total_times[c],
-            diffusion_coefficient=diffusion_coefficients[c],
-            diffusion_barrier_alpha=diffusion_barrier_alpha,
+            diffusion_total_time=_value_for_channel(diffusion_total_times, c),
+            diffusion_coefficient=_value_for_channel(diffusion_coefficients, c),
+            diffusion_barrier_alpha=_value_for_channel(diffusion_barrier_alphas, c),
             mic_spacing=1.0,
             leaky_outer_boundary=False,
             use_gpu=False,
@@ -567,15 +579,6 @@ def plot_single_channel_comparison(msi, generated, channel_idx, output_path, tit
 
 
 def plot_channel_comparison(msi, generated, channels_to_show, output_path, title, channel_labels=None):
-    """
-    Writes one comparison plot per channel.
-
-    Output filenames use:
-        oldname_channelnumber.ext
-
-    Returns:
-        dict mapping channel_number -> L1 error.
-    """
     output_dir = os.path.dirname(output_path) or "."
     os.makedirs(output_dir, exist_ok=True)
 
@@ -598,9 +601,6 @@ def plot_channel_comparison(msi, generated, channels_to_show, output_path, title
 
 
 def save_l1_errors(l1_errors_by_step, output_dir, filename="l1_errors_by_channel.csv"):
-    """
-    Save per-channel L1 errors for each generated-comparison step.
-    """
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, filename)
 
@@ -622,12 +622,6 @@ def save_l1_errors(l1_errors_by_step, output_dir, filename="l1_errors_by_channel
 
 
 def apply_noise_model(canvas, target, seed=None, clip_nonnegative=True, rank_match=True):
-    """
-    Multi-channel noise model.
-
-    rank_match=True reproduces rank-matched residual behavior.
-    rank_match=False is much faster because it skips two full-array sorts.
-    """
     canvas = np.asarray(canvas, dtype=np.float32)
     target = np.asarray(target, dtype=np.float32)
 
@@ -699,6 +693,197 @@ def _apply_noise_model_single_channel(canvas_ch, target_ch, rng, rank_match=True
     return canvas_ch + assigned_noise.reshape(residual.shape)
 
 
+def _csv_value(value):
+    if value is None:
+        return ""
+
+    if isinstance(value, np.generic):
+        value = value.item()
+
+    if isinstance(value, float):
+        return f"{value:.12g}"
+
+    return str(value)
+
+
+def save_parameter_summary(
+    output_dir,
+    filename,
+    channel_labels,
+    channels,
+    diffusion_coefficients,
+    diffusion_dt,
+    diffusion_barrier_alphas,
+    t,
+    mus,
+    noise_seed,
+    apply_final_noise,
+    noise_rank_match,
+    intensities,
+    sigmas,
+):
+    print("Saving parameter summary CSV")
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_path = os.path.join(output_dir, filename)
+
+    diagnostic_columns = [
+        "sigma_px_est",
+        "sigma_ms_est",
+        "barrier_alpha_est",
+        "estimation_power",
+        "cell_fraction_threshold",
+        "background_fraction_threshold",
+        "near_background_radius_ms",
+        "far_background_radius_ms",
+        "intracellular_diffusion_fraction",
+        "median_cell_radius_ms",
+        "cell_mean",
+        "cell_median",
+        "cell_std",
+        "cell_cv",
+        "cell_homogeneity",
+        "near_background_median",
+        "far_background_median",
+        "edge_drop",
+        "background_drop",
+        "global_background",
+        "n_cell_pixels",
+        "n_background_pixels",
+        "n_mixed_pixels",
+        "n_near_background_pixels",
+        "n_far_background_pixels",
+        "method",
+        "warning",
+    ]
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(
+            "mass,"
+            "channel,"
+            "diffusion_coefficient,"
+            "diffusion_dt,"
+            "diffusion_barrier_alpha,"
+            "t,"
+            "noise_seed,"
+            "apply_final_noise,"
+            "noise_rank_match,"
+            + ",".join(diagnostic_columns)
+            + ",intensities,sigmas\n"
+        )
+
+        for local_idx, channel_label in enumerate(channel_labels):
+            intensity_values = ";".join(
+                f"{x:.12g}"
+                for x in intensities[local_idx]
+            )
+
+            sigma_values = ";".join(
+                f"{x:.12g}"
+                for x in sigmas[local_idx]
+            )
+
+            noise_seed_value = "" if noise_seed is None else str(noise_seed)
+
+            diagnostic_values = [
+                _csv_value(mus[local_idx].get(col, ""))
+                for col in diagnostic_columns
+            ]
+
+            f.write(
+                f"{_csv_value(channel_label)},"
+                f"{channels[local_idx]},"
+                f"{diffusion_coefficients[local_idx]:.12g},"
+                f"{diffusion_dt[local_idx]:.12g},"
+                f"{diffusion_barrier_alphas[local_idx]:.12g},"
+                f"{t:.12g},"
+                f"{noise_seed_value},"
+                f"{bool(apply_final_noise)},"
+                f"{bool(noise_rank_match)},"
+                + ",".join(diagnostic_values)
+                + f",\"{intensity_values}\","
+                f"\"{sigma_values}\"\n"
+            )
+
+    print(f"Saved parameter summary to {output_path}")
+
+    return output_path
+
+def estimate_median_cell_radius_ms(mask, scaling_factor):
+    cell_ids = np.unique(mask)
+    cell_ids = cell_ids[cell_ids > 0]
+
+    radii_ms = []
+
+    for cell_id in cell_ids:
+        area_hr = int(np.count_nonzero(mask == cell_id))
+
+        if area_hr <= 0:
+            continue
+
+        radius_hr = float(np.sqrt(area_hr / np.pi))
+        radius_ms = radius_hr / float(scaling_factor)
+        radii_ms.append(radius_ms)
+
+    if len(radii_ms) == 0:
+        return 0.0
+
+    return float(np.median(np.asarray(radii_ms, dtype=np.float64)))
+
+
+def build_msi_mask_fraction(mask, scaling_factor, target_shape):
+    return block_fraction_from_hr_mask(
+        mask_i=(mask > 0),
+        scaling_factor=scaling_factor,
+        target_shape=target_shape,
+    )
+
+
+def estimate_channel_mus(
+    msi,
+    mask,
+    scaling_factor,
+    num_channels,
+    diffusion_estimation_power=2.0,
+    diffusion_cell_fraction_threshold=0.5,
+    diffusion_background_fraction_threshold=0.05,
+    diffusion_near_background_radius_ms=1.5,
+    diffusion_far_background_radius_ms=3.0,
+    diffusion_intracellular_fraction=0.25,
+    diffusion_max_mu=None,
+):
+    mask_fraction_ms = build_msi_mask_fraction(
+        mask=mask,
+        scaling_factor=scaling_factor,
+        target_shape=msi.shape[:2],
+    )
+
+    median_cell_radius_ms = estimate_median_cell_radius_ms(
+        mask=mask,
+        scaling_factor=scaling_factor,
+    )
+
+    mus = []
+
+    for c in range(num_channels):
+        mu_c = estimate_mu_from_distribution(
+            distribution=msi[:, :, c],
+            mask_fraction=mask_fraction_ms,
+            scaling_factor=scaling_factor,
+            median_cell_radius_ms=median_cell_radius_ms,
+            estimation_power=diffusion_estimation_power,
+            cell_fraction_threshold=diffusion_cell_fraction_threshold,
+            background_fraction_threshold=diffusion_background_fraction_threshold,
+            near_background_radius_ms=diffusion_near_background_radius_ms,
+            far_background_radius_ms=diffusion_far_background_radius_ms,
+            intracellular_diffusion_fraction=diffusion_intracellular_fraction,
+            max_mu=diffusion_max_mu,
+        )
+
+        mus.append(mu_c)
+
+    return mus
+
 def estimate_parameters(
     mask,
     msi,
@@ -719,50 +904,27 @@ def estimate_parameters(
     diffusion_total_time=1.0,
     diffusion_downsample=8,
     max_sigma_lowres=15.0,
+    diffusion_estimation_power=2.0,
+    diffusion_cell_fraction_threshold=0.5,
+    diffusion_background_fraction_threshold=0.05,
+    diffusion_near_background_radius_ms=1.5,
+    diffusion_far_background_radius_ms=3.0,
+    diffusion_intracellular_fraction=0.25,
+    diffusion_max_mu=None,
     noise_seed=None,
     apply_final_noise=True,
     noise_rank_match=True,
-    save_parameter_summary=True,
-):
+    save_parameter_summary_csv=True):
     """
     Estimate MSI generation parameters.
 
-    Args:
-        mask: High-resolution labeled segmentation mask, shape (H_hr, W_hr).
-        msi: Full MSI cube, shape (H_ms, W_ms, C).
-        channels: Original MSI channel indexes to select from the input MSI cube.
-            Example: pass [88] to estimate only original channel 88.
-        masses: Optional list/array of mass labels corresponding to the selected
-            channels. These are used for plotting titles, output filenames, L1 CSV
-            channel labels, and the parameter-summary CSV.
-        channels_to_show: Local channel indexes after slicing to plot.
-            Defaults to all selected channels.
-        crop_top: Number of MSI pixels to crop from the top.
-        crop_bottom: Number of MSI pixels to crop from the bottom.
-        crop_left: Number of MSI pixels to crop from the left.
-        crop_right: Number of MSI pixels to crop from the right.
-        flatten_top_percent: Whether to clip each selected MSI channel at its
-            99th percentile before parameter estimation. Enabled by default.
-        plotting_enabled: Enables/disables all plot and L1 CSV output.
-        output_dir: Directory for plots, L1 CSV, and parameter-summary CSV.
-        sigma_max_workers: Thread count for sigma optimization.
-        generation_max_workers: Thread count for full-canvas channel generation.
-        padding: Per-cell crop padding in MSI pixels.
-        diffusion_barrier_alpha: Passed to generate_msi_from_mask_slice.
-        diffusion_total_time: Scalar T used for all channels.
-        diffusion_downsample: Passed to generate_msi_from_mask_slice.
-        max_sigma_lowres: Passed to generate_msi_from_mask_slice.
-        noise_seed: Optional random seed for final noise model.
-        apply_final_noise: Whether to generate the final noise-comparison output.
-        noise_rank_match: Whether final noise is rank-matched to residuals.
-        save_parameter_summary: Whether to save parameters_by_mass.csv.
-
     Returns:
-        intensities_2d: Array with shape (num_channels, num_cells).
-        sigmas_2d: Array with shape (num_channels, num_cells).
-        diffusion_coefficients_1d: Array with shape (num_channels,).
-        diffusion_dt_1d: Array with shape (num_channels,), equal to diffusion_total_time per channel.
-        t: Scalar diffusion total time used for all channels.
+        intensities_2d
+        sigmas_2d
+        diffusion_coefficients_1d
+        diffusion_dt_1d
+        diffusion_barrier_alphas_1d
+        t
     """
     print("Preparing input arrays")
 
@@ -871,6 +1033,7 @@ def estimate_parameters(
 
     zero_diffusion_total_times = [0.0] * num_channels
     zero_diffusion_coefficients = [0.0] * num_channels
+    zero_diffusion_barrier_alphas = [diffusion_barrier_alpha] * num_channels
 
     print("Generating initial no-diffusion simulation before sigma optimization")
     preopt_generator = make_channel_generator(
@@ -879,7 +1042,7 @@ def estimate_parameters(
         intensities=intensities,
         diffusion_total_times=zero_diffusion_total_times,
         diffusion_coefficients=zero_diffusion_coefficients,
-        diffusion_barrier_alpha=diffusion_barrier_alpha,
+        diffusion_barrier_alphas=zero_diffusion_barrier_alphas,
         scaling_factor=scaling_factor,
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
@@ -920,7 +1083,7 @@ def estimate_parameters(
         intensities=intensities,
         diffusion_total_times=zero_diffusion_total_times,
         diffusion_coefficients=zero_diffusion_coefficients,
-        diffusion_barrier_alpha=diffusion_barrier_alpha,
+        diffusion_barrier_alphas=zero_diffusion_barrier_alphas,
         scaling_factor=scaling_factor,
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
@@ -943,12 +1106,19 @@ def estimate_parameters(
             channel_labels=channel_labels,
         )
 
-    print("Estimating diffusion coefficients")
+    print("Estimating diffusion coefficients and barrier alphas")
     mus = estimate_channel_mus(
         msi=msi,
         mask=mask,
         scaling_factor=scaling_factor,
         num_channels=num_channels,
+        diffusion_estimation_power=diffusion_estimation_power,
+        diffusion_cell_fraction_threshold=diffusion_cell_fraction_threshold,
+        diffusion_background_fraction_threshold=diffusion_background_fraction_threshold,
+        diffusion_near_background_radius_ms=diffusion_near_background_radius_ms,
+        diffusion_far_background_radius_ms=diffusion_far_background_radius_ms,
+        diffusion_intracellular_fraction=diffusion_intracellular_fraction,
+        diffusion_max_mu=diffusion_max_mu,
     )
 
     print("Preparing diffusion parameters")
@@ -956,24 +1126,25 @@ def estimate_parameters(
     diffusion_dt_1d = np.full(num_channels, t, dtype=np.float64)
 
     diffusion_coefficients_1d = np.asarray(
-        [float(mu_c["mu_est"]) for mu_c in mus],
+        [float(mu_c.get("mu_est", 0.0)) for mu_c in mus],
         dtype=np.float64,
     )
 
-    print("Scaling intensities to target totals")
-    intensities = scale_intensities_to_target_totals(
-        intensities=intensities,
-        msi=msi,
+    diffusion_barrier_alphas_1d = np.asarray(
+        [float(mu_c.get("barrier_alpha_est", diffusion_barrier_alpha)) for mu_c in mus],
+        dtype=np.float64,
     )
 
-    print("Generating mu-based diffusion simulation")
+    diffusion_barrier_alphas_1d = np.clip(diffusion_barrier_alphas_1d, 0.0, 1.0)
+
+    print("Generating barrier-aware mu-based diffusion simulation")
     mu_generator = make_channel_generator(
         mask=mask,
         sigmas=sigmas,
         intensities=intensities,
         diffusion_total_times=diffusion_dt_1d.tolist(),
         diffusion_coefficients=diffusion_coefficients_1d.tolist(),
-        diffusion_barrier_alpha=diffusion_barrier_alpha,
+        diffusion_barrier_alphas=diffusion_barrier_alphas_1d.tolist(),
         scaling_factor=scaling_factor,
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
@@ -986,13 +1157,13 @@ def estimate_parameters(
     )
 
     if plotting_enabled:
-        print("Plotting mu-based diffusion comparison")
+        print("Plotting barrier-aware mu-based diffusion comparison")
         l1_errors_by_step["mu_diffusion"] = plot_channel_comparison(
             msi=msi,
             generated=generated_mu,
             channels_to_show=channels_to_show,
             output_path=os.path.join(output_dir, "target_v_diffusion.png"),
-            title="Mu-based diffusion comparison",
+            title="Barrier-aware mu-based diffusion comparison",
             channel_labels=channel_labels,
         )
 
@@ -1012,7 +1183,7 @@ def estimate_parameters(
                 generated=generated_final,
                 channels_to_show=channels_to_show,
                 output_path=os.path.join(output_dir, "target_v_final.png"),
-                title="Mu-based diffusion + noise comparison",
+                title="Barrier-aware diffusion + noise comparison",
                 channel_labels=channel_labels,
             )
 
@@ -1028,57 +1199,34 @@ def estimate_parameters(
     intensities_2d = np.asarray(intensities, dtype=np.float64)
     sigmas_2d = np.asarray(sigmas, dtype=np.float64)
 
-    if save_parameter_summary:
-        print("Saving parameter summary CSV")
-        os.makedirs(output_dir, exist_ok=True)
-
-        parameter_summary_path = os.path.join(output_dir, "parameters_by_mass.csv")
-
-        with open(parameter_summary_path, "w", encoding="utf-8") as f:
-            f.write(
-                "mass,"
-                "channel,"
-                "diffusion_coefficient,"
-                "diffusion_dt,"
-                "t,"
-                "noise_seed,"
-                "apply_final_noise,"
-                "noise_rank_match,"
-                "intensities,"
-                "sigmas\n"
-            )
-
-            for local_idx, channel_label in enumerate(channel_labels):
-                intensity_values = ";".join(
-                    f"{x:.12g}"
-                    for x in intensities_2d[local_idx]
-                )
-
-                sigma_values = ";".join(
-                    f"{x:.12g}"
-                    for x in sigmas_2d[local_idx]
-                )
-
-                noise_seed_value = "" if noise_seed is None else str(noise_seed)
-
-                f.write(
-                    f"{channel_label},"
-                    f"{channels[local_idx]},"
-                    f"{diffusion_coefficients_1d[local_idx]:.12g},"
-                    f"{diffusion_dt_1d[local_idx]:.12g},"
-                    f"{t:.12g},"
-                    f"{noise_seed_value},"
-                    f"{bool(apply_final_noise)},"
-                    f"{bool(noise_rank_match)},"
-                    f"\"{intensity_values}\","
-                    f"\"{sigma_values}\"\n"
-                )
-
-        print(f"Saved parameter summary to {parameter_summary_path}")
+    if save_parameter_summary_csv:
+        save_parameter_summary(
+            output_dir=output_dir,
+            filename="parameters_by_mass.csv",
+            channel_labels=channel_labels,
+            channels=channels,
+            diffusion_coefficients=diffusion_coefficients_1d,
+            diffusion_dt=diffusion_dt_1d,
+            diffusion_barrier_alphas=diffusion_barrier_alphas_1d,
+            t=t,
+            mus=mus,
+            noise_seed=noise_seed,
+            apply_final_noise=apply_final_noise,
+            noise_rank_match=noise_rank_match,
+            intensities=intensities_2d,
+            sigmas=sigmas_2d,
+        )
 
     print("Parameter estimation finished")
 
-    return intensities_2d, sigmas_2d, diffusion_coefficients_1d, diffusion_dt_1d, t
+    return (
+        intensities_2d,
+        sigmas_2d,
+        diffusion_coefficients_1d,
+        diffusion_dt_1d,
+        diffusion_barrier_alphas_1d,
+        t,
+    )
 
 
 if __name__ == "__main__":
@@ -1113,7 +1261,14 @@ if __name__ == "__main__":
             f"delta={abs(matched_mass - requested_mass):.8g}"
         )
 
-    intensities, sigmas, diffusion_coefficients, diffusion_dt, t = estimate_parameters(
+    (
+        intensities,
+        sigmas,
+        diffusion_coefficients,
+        diffusion_dt,
+        diffusion_barrier_alphas,
+        t,
+    ) = estimate_parameters(
         mask=mask,
         msi=msi,
         channels=channels,
@@ -1128,8 +1283,17 @@ if __name__ == "__main__":
         sigma_max_workers=4,
         generation_max_workers=1,
         diffusion_total_time=1.0,
+        diffusion_downsample=8,
+        max_sigma_lowres=15.0,
+        diffusion_estimation_power=2.0,
+        diffusion_cell_fraction_threshold=0.5,
+        diffusion_background_fraction_threshold=0.05,
+        diffusion_near_background_radius_ms=1.5,
+        diffusion_far_background_radius_ms=3.0,
+        diffusion_intracellular_fraction=0.25,
+        diffusion_max_mu=None,
         noise_seed=None,
         apply_final_noise=True,
         noise_rank_match=True,
-        save_parameter_summary=True,
+        save_parameter_summary_csv=True,
     )

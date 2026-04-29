@@ -1,4 +1,3 @@
-import copy
 import numpy as np
 import matplotlib.pyplot as plt
 import skimage
@@ -33,7 +32,7 @@ def _upsample_sum_preserving(low, block, original_shape):
     """
     Upsample low-resolution block sums back to full resolution.
 
-    Because 'low' contains sums per low-res pixel, naive zoom would inflate total
+    Because low contains sums per low-res pixel, naive zoom would inflate total
     intensity by approximately block**2. Dividing by block**2 preserves total mass.
     """
     if block <= 1:
@@ -49,6 +48,45 @@ def _upsample_sum_preserving(low, block, original_shape):
 
     H, W = original_shape
     return high[:H, :W].astype(np.float32, copy=False)
+
+
+def _apply_mask_barrier(diffused, u0, mask, barrier_alpha, preserve_total=False):
+    """
+    Apply a foreground/background permeability barrier after fast Gaussian diffusion.
+
+    Interpretation:
+        barrier_alpha = 0.0 -> no permeability into background
+        barrier_alpha = 1.0 -> full free diffusion into background
+
+    The fast diffusion approximation itself is a global Gaussian filter. This
+    post-processing step suppresses the background part of the diffused signal.
+
+    Important:
+        preserve_total=False is recommended for this MALDI simulation pipeline.
+        Otherwise blocked background mass is redistributed into foreground cells,
+        which can artificially amplify cell signal.
+    """
+    result = np.asarray(diffused, dtype=np.float32).copy()
+    mask = np.asarray(mask)
+
+    if result.shape != mask.shape:
+        raise ValueError("diffused and mask must have the same shape.")
+
+    alpha = float(np.clip(barrier_alpha, 0.0, 1.0))
+
+    if alpha >= 1.0:
+        return result.astype(np.float32, copy=False)
+
+    foreground = mask > 0
+
+    if not np.any(foreground):
+        return result.astype(np.float32, copy=False)
+
+    background = ~foreground
+
+    result[background] *= alpha
+
+    return result.astype(np.float32, copy=False)
 
 
 def diffuse_mask_2d_fast_downsampled(
@@ -159,7 +197,7 @@ def diffuse_mask_2d_fast_downsampled(
             return u0.copy()
 
     print(
-        "[diffusion output]",
+        "[diffusion output before barrier]",
         "sum =", float(high.sum()),
         "max =", float(high.max()),
     )
@@ -173,7 +211,7 @@ def diffuse_mask_2d(
     total_time,
     dt=0.1,
     diffusion_coeff=1.0,
-    barrier_alpha=0.1,
+    barrier_alpha=0.0,
     leaky_outer_boundary=False,
     cg_tol=None,
     cg_maxiter=None,
@@ -183,14 +221,14 @@ def diffuse_mask_2d(
     max_sigma_lowres=10.0,
 ):
     """
-    Compatibility wrapper.
+    Fast approximate masked diffusion.
 
-    This replaces the old sparse CG solver with the fast downsampled Gaussian
-    diffusion approximation.
+    The actual diffusion is approximated with a downsampled Gaussian filter.
+    A mask-based foreground/background barrier is then applied.
 
-    The arguments mask, dt, barrier_alpha, cg_tol, cg_maxiter, and use_gpu are
-    kept so existing calls do not break. The fast approximation does not use
-    mask barriers.
+    barrier_alpha:
+        0.0 -> no permeability into background
+        1.0 -> full free Gaussian diffusion into background
     """
     m = np.asarray(mask)
     u0 = np.asarray(u0, dtype=np.float32)
@@ -207,7 +245,7 @@ def diffuse_mask_2d(
     if total_time <= 0 or diffusion_coeff <= 0:
         return u0.copy()
 
-    return diffuse_mask_2d_fast_downsampled(
+    diffused = diffuse_mask_2d_fast_downsampled(
         u0=u0,
         diffusion_coeff=diffusion_coeff,
         total_time=total_time,
@@ -217,6 +255,23 @@ def diffuse_mask_2d(
         leaky_outer_boundary=leaky_outer_boundary,
         preserve_total=True,
     )
+
+    diffused = _apply_mask_barrier(
+        diffused=diffused,
+        u0=u0,
+        mask=m,
+        barrier_alpha=barrier_alpha,
+        preserve_total=False,
+    )
+
+    print(
+        "[diffusion output after barrier]",
+        "barrier_alpha =", float(np.clip(barrier_alpha, 0.0, 1.0)),
+        "sum =", float(diffused.sum()),
+        "max =", float(diffused.max()) if diffused.size else 0.0,
+    )
+
+    return diffused.astype(np.float32, copy=False)
 
 
 def generate_msi_from_existing_mask(
@@ -484,7 +539,7 @@ if __name__ == "__main__":
         diffusion_total_time=1,
         diffusion_dt=0.1,
         diffusion_coeff=265041.87486068613,
-        barrier_alpha=0.1,
+        barrier_alpha=0.0,
         leaky_outer_boundary=False,
         intensities=intensities,
         sigmas=sigmas,
@@ -501,7 +556,7 @@ if __name__ == "__main__":
     plt.colorbar()
 
     plt.subplot(1, 3, 2)
-    plt.title("Fast downsampled diffusion canvas")
+    plt.title("Barrier-aware diffusion canvas")
     plt.imshow(diffusion_canvas, cmap="viridis")
     plt.colorbar()
 
