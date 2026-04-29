@@ -475,7 +475,15 @@ def _channel_suffix(channel_index, channel_labels=None):
     if channel_labels is None:
         return int(channel_index)
 
-    return int(channel_labels[channel_index])
+    label = channel_labels[channel_index]
+
+    if isinstance(label, np.generic):
+        label = label.item()
+
+    if isinstance(label, float):
+        return f"{label:g}"
+
+    return str(label)
 
 
 def _channel_output_path(output_dir, base_filename, channel_number):
@@ -695,6 +703,7 @@ def estimate_parameters(
     mask,
     msi,
     channels=None,
+    masses=None,
     channels_to_show=None,
     crop_top=0,
     crop_bottom=0,
@@ -713,6 +722,7 @@ def estimate_parameters(
     noise_seed=None,
     apply_final_noise=True,
     noise_rank_match=True,
+    save_parameter_summary=True,
 ):
     """
     Estimate MSI generation parameters.
@@ -721,8 +731,10 @@ def estimate_parameters(
         mask: High-resolution labeled segmentation mask, shape (H_hr, W_hr).
         msi: Full MSI cube, shape (H_ms, W_ms, C).
         channels: Original MSI channel indexes to select from the input MSI cube.
-            These are also used as output filename labels.
             Example: pass [88] to estimate only original channel 88.
+        masses: Optional list/array of mass labels corresponding to the selected
+            channels. These are used for plotting titles, output filenames, L1 CSV
+            channel labels, and the parameter-summary CSV.
         channels_to_show: Local channel indexes after slicing to plot.
             Defaults to all selected channels.
         crop_top: Number of MSI pixels to crop from the top.
@@ -732,7 +744,7 @@ def estimate_parameters(
         flatten_top_percent: Whether to clip each selected MSI channel at its
             99th percentile before parameter estimation. Enabled by default.
         plotting_enabled: Enables/disables all plot and L1 CSV output.
-        output_dir: Directory for plots and L1 CSV.
+        output_dir: Directory for plots, L1 CSV, and parameter-summary CSV.
         sigma_max_workers: Thread count for sigma optimization.
         generation_max_workers: Thread count for full-canvas channel generation.
         padding: Per-cell crop padding in MSI pixels.
@@ -743,6 +755,7 @@ def estimate_parameters(
         noise_seed: Optional random seed for final noise model.
         apply_final_noise: Whether to generate the final noise-comparison output.
         noise_rank_match: Whether final noise is rank-matched to residuals.
+        save_parameter_summary: Whether to save parameters_by_mass.csv.
 
     Returns:
         intensities_2d: Array with shape (num_channels, num_cells).
@@ -791,6 +804,19 @@ def estimate_parameters(
 
     print("Selecting MSI channels")
     msi = msi[:, :, channels]
+
+    if masses is None:
+        channel_labels = list(channels)
+    else:
+        masses = list(np.asarray(masses).ravel())
+
+        if len(masses) != len(channels):
+            raise ValueError(
+                "masses must contain one entry per selected channel. "
+                f"Got {len(masses)} masses for {len(channels)} selected channels."
+            )
+
+        channel_labels = masses
 
     if flatten_top_percent:
         print("Flattening top percent of selected MSI channels")
@@ -873,7 +899,7 @@ def estimate_parameters(
             channels_to_show=channels_to_show,
             output_path=os.path.join(output_dir, "target_v_initial.png"),
             title="Initial comparison before sigma optimization",
-            channel_labels=channels,
+            channel_labels=channel_labels,
         )
 
     print("Optimizing sigmas")
@@ -914,7 +940,7 @@ def estimate_parameters(
             channels_to_show=channels_to_show,
             output_path=os.path.join(output_dir, "target_v_optimal_sigma.png"),
             title="Initial comparison after sigma optimization",
-            channel_labels=channels,
+            channel_labels=channel_labels,
         )
 
     print("Estimating diffusion coefficients")
@@ -967,7 +993,7 @@ def estimate_parameters(
             channels_to_show=channels_to_show,
             output_path=os.path.join(output_dir, "target_v_diffusion.png"),
             title="Mu-based diffusion comparison",
-            channel_labels=channels,
+            channel_labels=channel_labels,
         )
 
     if apply_final_noise:
@@ -987,7 +1013,7 @@ def estimate_parameters(
                 channels_to_show=channels_to_show,
                 output_path=os.path.join(output_dir, "target_v_final.png"),
                 title="Mu-based diffusion + noise comparison",
-                channel_labels=channels,
+                channel_labels=channel_labels,
             )
 
     if plotting_enabled and l1_errors_by_step:
@@ -1002,29 +1028,108 @@ def estimate_parameters(
     intensities_2d = np.asarray(intensities, dtype=np.float64)
     sigmas_2d = np.asarray(sigmas, dtype=np.float64)
 
+    if save_parameter_summary:
+        print("Saving parameter summary CSV")
+        os.makedirs(output_dir, exist_ok=True)
+
+        parameter_summary_path = os.path.join(output_dir, "parameters_by_mass.csv")
+
+        with open(parameter_summary_path, "w", encoding="utf-8") as f:
+            f.write(
+                "mass,"
+                "channel,"
+                "diffusion_coefficient,"
+                "diffusion_dt,"
+                "t,"
+                "noise_seed,"
+                "apply_final_noise,"
+                "noise_rank_match,"
+                "intensities,"
+                "sigmas\n"
+            )
+
+            for local_idx, channel_label in enumerate(channel_labels):
+                intensity_values = ";".join(
+                    f"{x:.12g}"
+                    for x in intensities_2d[local_idx]
+                )
+
+                sigma_values = ";".join(
+                    f"{x:.12g}"
+                    for x in sigmas_2d[local_idx]
+                )
+
+                noise_seed_value = "" if noise_seed is None else str(noise_seed)
+
+                f.write(
+                    f"{channel_label},"
+                    f"{channels[local_idx]},"
+                    f"{diffusion_coefficients_1d[local_idx]:.12g},"
+                    f"{diffusion_dt_1d[local_idx]:.12g},"
+                    f"{t:.12g},"
+                    f"{noise_seed_value},"
+                    f"{bool(apply_final_noise)},"
+                    f"{bool(noise_rank_match)},"
+                    f"\"{intensity_values}\","
+                    f"\"{sigma_values}\"\n"
+                )
+
+        print(f"Saved parameter summary to {parameter_summary_path}")
+
     print("Parameter estimation finished")
 
     return intensities_2d, sigmas_2d, diffusion_coefficients_1d, diffusion_dt_1d, t
 
 
 if __name__ == "__main__":
-    channels = list(range(88, 89))
+    target_masses = np.asarray(
+        [
+            369.35102274,
+            744.55183039,
+            760.58278915,
+            885.78784207,
+        ],
+        dtype=np.float64,
+    )
 
     mask = np.load("input/seg.npy").astype(np.int32)
     msi = np.load("input/msi_data.npy").astype(np.float32)
+
+    all_masses = np.load("input/mass_list.npy").astype(np.float64).ravel()
+
+    channels = [
+        int(np.argmin(np.abs(all_masses - target_mass)))
+        for target_mass in target_masses
+    ]
+
+    masses = all_masses[channels]
+
+    print("Selected channels:")
+    for requested_mass, channel, matched_mass in zip(target_masses, channels, masses):
+        print(
+            f"requested mass={requested_mass:.8f}, "
+            f"channel={channel}, "
+            f"matched mass={matched_mass:.8f}, "
+            f"delta={abs(matched_mass - requested_mass):.8g}"
+        )
 
     intensities, sigmas, diffusion_coefficients, diffusion_dt, t = estimate_parameters(
         mask=mask,
         msi=msi,
         channels=channels,
-        crop_top=0,
-        crop_bottom=0,
-        crop_left=0,
-        crop_right=0,
+        masses=masses,
+        crop_top=110,
+        crop_bottom=110,
+        crop_left=100,
+        crop_right=100,
         flatten_top_percent=True,
         plotting_enabled=True,
         output_dir="output",
         sigma_max_workers=4,
         generation_max_workers=1,
         diffusion_total_time=1.0,
+        noise_seed=None,
+        apply_final_noise=True,
+        noise_rank_match=True,
+        save_parameter_summary=True,
     )
