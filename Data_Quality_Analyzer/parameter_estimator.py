@@ -694,8 +694,13 @@ def _apply_noise_model_single_channel(canvas_ch, target_ch, rng, rank_match=True
 def estimate_parameters(
     mask,
     msi,
-    original_channel_numbers=None,
+    channels=None,
     channels_to_show=None,
+    crop_top=0,
+    crop_bottom=0,
+    crop_left=0,
+    crop_right=0,
+    flatten_top_percent=True,
     plotting_enabled=True,
     output_dir="output",
     sigma_max_workers=4,
@@ -714,10 +719,18 @@ def estimate_parameters(
 
     Args:
         mask: High-resolution labeled segmentation mask, shape (H_hr, W_hr).
-        msi: MSI cube, shape (H_ms, W_ms, C).
-        original_channel_numbers: Optional labels used for output filenames.
-            Example: if msi contains original channel 88 only, pass [88].
-        channels_to_show: Local channel indexes to plot. Defaults to all channels.
+        msi: Full MSI cube, shape (H_ms, W_ms, C).
+        channels: Original MSI channel indexes to select from the input MSI cube.
+            These are also used as output filename labels.
+            Example: pass [88] to estimate only original channel 88.
+        channels_to_show: Local channel indexes after slicing to plot.
+            Defaults to all selected channels.
+        crop_top: Number of MSI pixels to crop from the top.
+        crop_bottom: Number of MSI pixels to crop from the bottom.
+        crop_left: Number of MSI pixels to crop from the left.
+        crop_right: Number of MSI pixels to crop from the right.
+        flatten_top_percent: Whether to clip each selected MSI channel at its
+            99th percentile before parameter estimation. Enabled by default.
         plotting_enabled: Enables/disables all plot and L1 CSV output.
         output_dir: Directory for plots and L1 CSV.
         sigma_max_workers: Thread count for sigma optimization.
@@ -749,6 +762,41 @@ def estimate_parameters(
     if mask.ndim != 2:
         raise ValueError(f"mask must have shape (H, W). Got {mask.shape}.")
 
+    crop_top = int(crop_top)
+    crop_bottom = int(crop_bottom)
+    crop_left = int(crop_left)
+    crop_right = int(crop_right)
+
+    if min(crop_top, crop_bottom, crop_left, crop_right) < 0:
+        raise ValueError("Crop values must be non-negative integers.")
+
+    if any([crop_top, crop_bottom, crop_left, crop_right]):
+        print("Cropping mask and MSI")
+        mask, msi = crop_canvas_and_msi(
+            mask=mask,
+            msi=msi,
+            top=crop_top,
+            bottom=crop_bottom,
+            left=crop_left,
+            right=crop_right,
+        )
+
+    if channels is None:
+        channels = list(range(msi.shape[-1]))
+    else:
+        channels = list(channels)
+
+    if len(channels) == 0:
+        raise ValueError("channels must contain at least one channel index.")
+
+    print("Selecting MSI channels")
+    msi = msi[:, :, channels]
+
+    if flatten_top_percent:
+        print("Flattening top percent of selected MSI channels")
+        p = np.percentile(msi, 99, axis=(0, 1), keepdims=True)
+        msi = np.clip(msi, 0, p)
+
     num_channels = int(msi.shape[-1])
 
     if channels_to_show is None:
@@ -756,15 +804,11 @@ def estimate_parameters(
 
     channels_to_show = list(channels_to_show)
 
-    if original_channel_numbers is None:
-        original_channel_numbers = list(range(num_channels))
-    else:
-        original_channel_numbers = list(original_channel_numbers)
-
-        if len(original_channel_numbers) != num_channels:
+    for ch in channels_to_show:
+        if ch < 0 or ch >= num_channels:
             raise ValueError(
-                "original_channel_numbers must have one entry per local MSI channel. "
-                f"Got {len(original_channel_numbers)} labels for {num_channels} channels."
+                "channels_to_show must contain local channel indexes after slicing. "
+                f"Got {ch}, but sliced MSI has {num_channels} channels."
             )
 
     if plotting_enabled:
@@ -829,7 +873,7 @@ def estimate_parameters(
             channels_to_show=channels_to_show,
             output_path=os.path.join(output_dir, "target_v_initial.png"),
             title="Initial comparison before sigma optimization",
-            channel_labels=original_channel_numbers,
+            channel_labels=channels,
         )
 
     print("Optimizing sigmas")
@@ -870,7 +914,7 @@ def estimate_parameters(
             channels_to_show=channels_to_show,
             output_path=os.path.join(output_dir, "target_v_optimal_sigma.png"),
             title="Initial comparison after sigma optimization",
-            channel_labels=original_channel_numbers,
+            channel_labels=channels,
         )
 
     print("Estimating diffusion coefficients")
@@ -923,7 +967,7 @@ def estimate_parameters(
             channels_to_show=channels_to_show,
             output_path=os.path.join(output_dir, "target_v_diffusion.png"),
             title="Mu-based diffusion comparison",
-            channel_labels=original_channel_numbers,
+            channel_labels=channels,
         )
 
     if apply_final_noise:
@@ -943,7 +987,7 @@ def estimate_parameters(
                 channels_to_show=channels_to_show,
                 output_path=os.path.join(output_dir, "target_v_final.png"),
                 title="Mu-based diffusion + noise comparison",
-                channel_labels=original_channel_numbers,
+                channel_labels=channels,
             )
 
     if plotting_enabled and l1_errors_by_step:
@@ -964,28 +1008,20 @@ def estimate_parameters(
 
 
 if __name__ == "__main__":
-    original_channels_to_show = list(range(88, 89))
+    channels = list(range(88, 89))
 
     mask = np.load("input/seg.npy").astype(np.int32)
-    msi = np.load("input/msi_data.npy")[:, :, original_channels_to_show]
-
-    p = np.percentile(msi, 99, axis=(0, 1), keepdims=True)
-    msi = np.clip(msi, 0, p)
-
-    # Optional crop
-    mask, msi = crop_canvas_and_msi(
-        mask,
-        msi,
-        top=110,
-        bottom=110,
-        left=100,
-        right=100,
-    )
+    msi = np.load("input/msi_data.npy").astype(np.float32)
 
     intensities, sigmas, diffusion_coefficients, diffusion_dt, t = estimate_parameters(
         mask=mask,
         msi=msi,
-        original_channel_numbers=original_channels_to_show,
+        channels=channels,
+        crop_top=0,
+        crop_bottom=0,
+        crop_left=0,
+        crop_right=0,
+        flatten_top_percent=True,
         plotting_enabled=True,
         output_dir="output",
         sigma_max_workers=4,
