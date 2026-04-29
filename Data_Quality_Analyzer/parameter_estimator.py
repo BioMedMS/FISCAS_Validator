@@ -1,12 +1,23 @@
-import math
+import os
 import numpy as np
 import matplotlib.pyplot as plt
 import skimage.measure
 from concurrent.futures import ThreadPoolExecutor
 
 from canvas_generation import generate_msi_from_mask_slice
-from diffusion_estimator import estimate_diffusion_parameter, estimate_mu_from_distribution
-from error_estimation import symmetric_l1_ratio
+from diffusion_estimator import estimate_mu_from_distribution
+
+
+def symmetric_l1_ratio(a, b):
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+
+    denominator = np.sum(np.abs(a)) + np.sum(np.abs(b))
+
+    if denominator == 0:
+        return 0.0
+
+    return float(np.sum(np.abs(a - b)) / denominator)
 
 
 def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
@@ -29,7 +40,11 @@ def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
 def get_cell_bounding_boxes(mask):
     """
     Much faster than scanning every row/column for every cell.
-    Returns dict: cell_id -> (top, bottom, left, right), bottom/right exclusive.
+
+    Returns:
+        cell_ids: np.ndarray of positive cell IDs.
+        boxes: dict mapping cell_id -> (top, bottom, left, right),
+            where bottom/right are exclusive.
     """
     cell_ids = np.unique(mask)
     cell_ids = cell_ids[cell_ids > 0]
@@ -109,13 +124,6 @@ def get_individual_cell_canvases(mask, msi_canvas, scaling_factor, padding):
 def block_fraction_from_hr_mask(mask_i, scaling_factor, target_shape):
     """
     Computes the fraction of each MSI pixel covered by the high-res cell mask.
-
-    This replaces:
-
-        target_hr = np.repeat(np.repeat(cell_target, sf, axis=0), sf, axis=1)
-        target_hr[mask_i].sum() / sf**2
-
-    with a much faster block-reduce on the boolean mask.
     """
     sf = int(scaling_factor)
 
@@ -147,13 +155,10 @@ def build_initial_sigmas_and_intensities(
     sigmas = [[] for _ in range(num_channels)]
     intensities = [[] for _ in range(num_channels)]
 
-    # Precompute masks and block fractions once per cell.
     cell_fractions = []
 
     for i, cell_id in enumerate(cell_indexes):
         mask_i = cell_masks[i] == cell_id
-
-        # Use channel 0 shape as spatial reference.
         target_shape = cell_targets[0][i].shape
 
         frac = block_fraction_from_hr_mask(
@@ -233,6 +238,7 @@ def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor)
 def crop_same_shape(a, b):
     h = min(a.shape[0], b.shape[0])
     w = min(a.shape[1], b.shape[1])
+
     return a[:h, :w], b[:h, :w]
 
 
@@ -250,11 +256,8 @@ def optimize_single_sigma(
     """
     Optimized sigma search.
 
-    Old version called generate_msi_from_mask_slice for every sigma trial.
-    This version:
-      1. Renders all local cells once.
-      2. Keeps the neighbor contribution fixed.
-      3. Re-renders only the target cell for each sigma trial.
+    This renders all local cells once, keeps neighbor contribution fixed,
+    and re-renders only the target cell for each sigma trial.
     """
     local_cell_ids = np.unique(cell_masks[i])
     local_cell_ids = local_cell_ids[local_cell_ids > 0]
@@ -392,18 +395,6 @@ def parallel_sigma_optimisation(
         for c, i, best_sigma in executor.map(_task, tasks):
             optimized_sigmas[c][i] = best_sigma
 
-    print("sigma optimization finished")
-
-    for c in range(num_channels):
-        sigma_arr = np.asarray(optimized_sigmas[c], dtype=np.float64)
-        print(
-            f"Channel {c}: "
-            f"mean_sigma={float(np.mean(sigma_arr)):.6f}, "
-            f"median_sigma={float(np.median(sigma_arr)):.6f}, "
-            f"min_sigma={float(np.min(sigma_arr)):.6f}, "
-            f"max_sigma={float(np.max(sigma_arr)):.6f}"
-        )
-
     return optimized_sigmas
 
 
@@ -417,16 +408,6 @@ def scale_intensities_to_target_totals(intensities, msi):
         if current_total > 0:
             intensity_scale = target_total / current_total
             intensities[c] = [float(x) * intensity_scale for x in intensities[c]]
-        else:
-            intensity_scale = 1.0
-
-        print(
-            f"Channel {c}: "
-            f"target_total={target_total:.6f}, "
-            f"pre_scale_intensity_total={current_total:.6f}, "
-            f"intensity_scale={intensity_scale:.6f}, "
-            f"post_scale_intensity_total={float(np.sum(intensities[c])):.6f}"
-        )
 
     return intensities
 
@@ -435,7 +416,6 @@ def estimate_channel_mus(msi, mask, scaling_factor, num_channels):
     mus = []
 
     for c in range(num_channels):
-        # This is still memory-heavy, but usually only runs once per channel.
         msi_hr_c = np.repeat(
             np.repeat(msi[:, :, c], scaling_factor, axis=0),
             scaling_factor,
@@ -444,11 +424,6 @@ def estimate_channel_mus(msi, mask, scaling_factor, num_channels):
 
         mu_c = estimate_mu_from_distribution(msi_hr_c, mask)
         mus.append(mu_c)
-
-    print("mu per channel:")
-
-    for c, mu_c in enumerate(mus):
-        print(f"Channel {c}: {mu_c}")
 
     return mus
 
@@ -496,114 +471,153 @@ def generate_all_channels(num_channels, channel_generator, max_workers=None):
     return np.stack(generated_channels, axis=-1)
 
 
-def print_channel_stats(msi, generated, label):
-    print(f"\n{label}")
+def _channel_suffix(channel_index, channel_labels=None):
+    if channel_labels is None:
+        return int(channel_index)
 
-    for c in range(msi.shape[-1]):
-        print(
-            f"Channel {c}: "
-            f"target_sum={float(msi[:, :, c].sum()):.6f}, "
-            f"target_max={float(msi[:, :, c].max()):.6f}, "
-            f"generated_sum={float(generated[:, :, c].sum()):.6f}, "
-            f"generated_max={float(generated[:, :, c].max()):.6f}"
-        )
+    return int(channel_labels[channel_index])
 
 
-def plot_channel_grid(msi, channels_to_show, output_path, title):
-    n = len(channels_to_show)
-    ncols = math.ceil(math.sqrt(n))
-    nrows = math.ceil(n / ncols)
+def _channel_output_path(output_dir, base_filename, channel_number):
+    stem, ext = os.path.splitext(os.path.basename(base_filename))
 
-    fig, axes = plt.subplots(
-        nrows,
-        ncols,
-        figsize=(4 * ncols, 4 * nrows),
-        squeeze=False,
-    )
+    return os.path.join(output_dir, f"{stem}_channel{channel_number}{ext}")
 
-    for ax, ch in zip(axes.flat, channels_to_show):
-        im = ax.imshow(msi[:, :, ch], cmap="viridis", aspect="auto")
-        ax.set_title(f"Channel {ch}")
-        ax.axis("off")
-        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
-    for ax in axes.flat[n:]:
-        ax.axis("off")
+def plot_mask(mask, output_path, title="Segmentation mask"):
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
-    fig.suptitle(title, fontsize=16)
-    fig.tight_layout()
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig, ax = plt.subplots(figsize=(5.0, 5.0), constrained_layout=True)
+    im = ax.imshow(mask, cmap="nipy_spectral", interpolation="nearest")
+    ax.set_title(title, fontsize=11)
+    ax.axis("off")
+    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
 
 
-def plot_channel_comparison(msi, generated, channels_to_show, output_path, title):
-    nrows = len(channels_to_show)
-    ncols = 2
+def plot_single_channel_comparison(msi, generated, channel_idx, output_path, title, channel_number=None):
+    channel_number = channel_idx if channel_number is None else channel_number
+
+    target_ch = msi[:, :, channel_idx]
+    generated_ch = generated[:, :, channel_idx]
+    layer_l1 = symmetric_l1_ratio(target_ch, generated_ch)
+
+    vmin = min(float(target_ch.min()), float(generated_ch.min()))
+    vmax = max(float(target_ch.max()), float(generated_ch.max()))
 
     fig, axes = plt.subplots(
-        nrows,
-        ncols,
-        figsize=(10, 3.5 * nrows),
-        squeeze=False,
-        constrained_layout=True,
+        1,
+        2,
+        figsize=(7.0, 3.4),
+        gridspec_kw={"wspace": 0.0},
+        constrained_layout=False,
     )
 
-    for row, ch in enumerate(channels_to_show):
-        target_ch = msi[:, :, ch]
-        generated_ch = generated[:, :, ch]
+    axes[0].imshow(
+        target_ch,
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        aspect="equal",
+        interpolation="nearest",
+    )
+    axes[0].set_title("Target", fontsize=10, pad=2)
+    axes[0].axis("off")
 
-        layer_l1 = symmetric_l1_ratio(target_ch, generated_ch)
+    im1 = axes[1].imshow(
+        generated_ch,
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        aspect="equal",
+        interpolation="nearest",
+    )
+    axes[1].set_title("Simulation", fontsize=10, pad=2)
+    axes[1].axis("off")
 
-        vmin = min(float(target_ch.min()), float(generated_ch.min()))
-        vmax = max(float(target_ch.max()), float(generated_ch.max()))
+    fig.suptitle(
+        f"{title} | Channel {channel_number} | L1: {layer_l1:.6f}",
+        fontsize=11,
+        y=0.98,
+    )
 
-        axes[row, 0].imshow(
-            target_ch,
-            cmap="viridis",
-            vmin=vmin,
-            vmax=vmax,
-            aspect="equal",
-        )
-        axes[row, 0].set_title("Target", fontsize=10)
-        axes[row, 0].axis("off")
+    fig.subplots_adjust(left=0.005, right=0.90, bottom=0.005, top=0.88, wspace=0.0)
+    cbar = fig.colorbar(
+        im1,
+        ax=axes.ravel().tolist(),
+        location="right",
+        shrink=0.92,
+        pad=0.01,
+    )
+    cbar.ax.tick_params(labelsize=8)
 
-        im1 = axes[row, 1].imshow(
-            generated_ch,
-            cmap="viridis",
-            vmin=vmin,
-            vmax=vmax,
-            aspect="equal",
-        )
-        axes[row, 1].set_title("Simulation", fontsize=10)
-        axes[row, 1].axis("off")
-
-        axes[row, 0].set_ylabel(
-            f"Channel {ch}\nL1: {layer_l1:.6f}",
-            rotation=0,
-            labelpad=55,
-            va="center",
-            ha="right",
-            fontsize=10,
-        )
-
-        fig.colorbar(
-            im1,
-            ax=axes[row, :],
-            location="right",
-            shrink=0.85,
-            pad=0.02,
-        )
-
-    fig.suptitle(title, fontsize=14)
-    plt.savefig(output_path, dpi=300, bbox_inches="tight")
+    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.02)
     plt.close(fig)
+
+    return layer_l1
+
+
+def plot_channel_comparison(msi, generated, channels_to_show, output_path, title, channel_labels=None):
+    """
+    Writes one comparison plot per channel.
+
+    Output filenames use:
+        oldname_channelnumber.ext
+
+    Returns:
+        dict mapping channel_number -> L1 error.
+    """
+    output_dir = os.path.dirname(output_path) or "."
+    os.makedirs(output_dir, exist_ok=True)
+
+    l1_errors = {}
+
+    for ch in channels_to_show:
+        channel_number = _channel_suffix(ch, channel_labels)
+        channel_output_path = _channel_output_path(output_dir, output_path, channel_number)
+
+        l1_errors[channel_number] = plot_single_channel_comparison(
+            msi=msi,
+            generated=generated,
+            channel_idx=ch,
+            output_path=channel_output_path,
+            title=title,
+            channel_number=channel_number,
+        )
+
+    return l1_errors
+
+
+def save_l1_errors(l1_errors_by_step, output_dir, filename="l1_errors_by_channel.csv"):
+    """
+    Save per-channel L1 errors for each generated-comparison step.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    output_path = os.path.join(output_dir, filename)
+
+    all_channels = sorted({
+        channel
+        for step_errors in l1_errors_by_step.values()
+        for channel in step_errors.keys()
+    })
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("step,channel,l1_error\n")
+
+        for step_name, step_errors in l1_errors_by_step.items():
+            for channel in all_channels:
+                if channel in step_errors:
+                    f.write(f"{step_name},{channel},{step_errors[channel]:.12g}\n")
+
+    return output_path
 
 
 def apply_noise_model(canvas, target, seed=None, clip_nonnegative=True, rank_match=True):
     """
     Multi-channel noise model.
 
-    rank_match=True reproduces your existing rank-matched residual behavior.
+    rank_match=True reproduces rank-matched residual behavior.
     rank_match=False is much faster because it skips two full-array sorts.
     """
     canvas = np.asarray(canvas, dtype=np.float32)
@@ -677,47 +691,106 @@ def _apply_noise_model_single_channel(canvas_ch, target_ch, rng, rank_match=True
     return canvas_ch + assigned_noise.reshape(residual.shape)
 
 
-if __name__ == "__main__":
-    original_channels_to_show = range(88, 89)
+def estimate_parameters(
+    mask,
+    msi,
+    original_channel_numbers=None,
+    channels_to_show=None,
+    plotting_enabled=True,
+    output_dir="output",
+    sigma_max_workers=4,
+    generation_max_workers=1,
+    padding=2,
+    diffusion_barrier_alpha=0.0,
+    diffusion_total_time=1.0,
+    diffusion_downsample=8,
+    max_sigma_lowres=15.0,
+    noise_seed=None,
+    apply_final_noise=True,
+    noise_rank_match=True,
+):
+    """
+    Estimate MSI generation parameters.
 
-    mask = np.load("input/seg.npy").astype(np.int32)
-    msi = np.load("input/msi_data.npy")[:, :, original_channels_to_show]
+    Args:
+        mask: High-resolution labeled segmentation mask, shape (H_hr, W_hr).
+        msi: MSI cube, shape (H_ms, W_ms, C).
+        original_channel_numbers: Optional labels used for output filenames.
+            Example: if msi contains original channel 88 only, pass [88].
+        channels_to_show: Local channel indexes to plot. Defaults to all channels.
+        plotting_enabled: Enables/disables all plot and L1 CSV output.
+        output_dir: Directory for plots and L1 CSV.
+        sigma_max_workers: Thread count for sigma optimization.
+        generation_max_workers: Thread count for full-canvas channel generation.
+        padding: Per-cell crop padding in MSI pixels.
+        diffusion_barrier_alpha: Passed to generate_msi_from_mask_slice.
+        diffusion_total_time: Scalar T used for all channels.
+        diffusion_downsample: Passed to generate_msi_from_mask_slice.
+        max_sigma_lowres: Passed to generate_msi_from_mask_slice.
+        noise_seed: Optional random seed for final noise model.
+        apply_final_noise: Whether to generate the final noise-comparison output.
+        noise_rank_match: Whether final noise is rank-matched to residuals.
 
-    channels_to_show = range(msi.shape[-1])
+    Returns:
+        intensities_2d: Array with shape (num_channels, num_cells).
+        sigmas_2d: Array with shape (num_channels, num_cells).
+        diffusion_coefficients_1d: Array with shape (num_channels,).
+        diffusion_dt_1d: Array with shape (num_channels,), equal to diffusion_total_time per channel.
+        t: Scalar diffusion total time used for all channels.
+    """
+    print("Preparing input arrays")
 
-    p = np.percentile(msi, 99, axis=(0, 1), keepdims=True)
-    msi = np.clip(msi, 0, p)
+    mask = np.asarray(mask, dtype=np.int32)
+    msi = np.asarray(msi, dtype=np.float32)
 
-    # Optional crop
-    # mask, msi = crop_canvas_and_msi(
-    #     mask,
-    #     msi,
-    #     top=110,
-    #     bottom=110,
-    #     left=100,
-    #     right=100,
-    # )
+    if msi.ndim != 3:
+        raise ValueError(f"msi must have shape (H, W, C). Got {msi.shape}.")
 
-    plot_channel_grid(
-        msi=msi,
-        channels_to_show=channels_to_show,
-        output_path="output/target_msi.png",
-        title="Target MSI",
-    )
+    if mask.ndim != 2:
+        raise ValueError(f"mask must have shape (H, W). Got {mask.shape}.")
 
+    num_channels = int(msi.shape[-1])
+
+    if channels_to_show is None:
+        channels_to_show = range(num_channels)
+
+    channels_to_show = list(channels_to_show)
+
+    if original_channel_numbers is None:
+        original_channel_numbers = list(range(num_channels))
+    else:
+        original_channel_numbers = list(original_channel_numbers)
+
+        if len(original_channel_numbers) != num_channels:
+            raise ValueError(
+                "original_channel_numbers must have one entry per local MSI channel. "
+                f"Got {len(original_channel_numbers)} labels for {num_channels} channels."
+            )
+
+    if plotting_enabled:
+        print("Plotting segmentation mask")
+        os.makedirs(output_dir, exist_ok=True)
+
+        plot_mask(
+            mask=mask,
+            output_path=os.path.join(output_dir, "mask.png"),
+            title="Segmentation mask",
+        )
+
+    l1_errors_by_step = {}
+
+    print("Computing scaling factor")
     scaling_factor = int(mask.shape[0] // msi.shape[0])
 
-    diffusion_barrier_alpha = 0.0
-
+    print("Extracting individual cell canvases")
     cell_indexes, cell_masks, cell_targets = get_individual_cell_canvases(
         mask=mask,
         msi_canvas=msi,
         scaling_factor=scaling_factor,
-        padding=2,
+        padding=padding,
     )
 
-    num_channels = len(cell_targets)
-
+    print("Building initial sigmas and intensities")
     sigmas, intensities = build_initial_sigmas_and_intensities(
         cell_indexes=cell_indexes,
         cell_masks=cell_masks,
@@ -726,6 +799,40 @@ if __name__ == "__main__":
         num_channels=num_channels,
     )
 
+    zero_diffusion_total_times = [0.0] * num_channels
+    zero_diffusion_coefficients = [0.0] * num_channels
+
+    print("Generating initial no-diffusion simulation before sigma optimization")
+    preopt_generator = make_channel_generator(
+        mask=mask,
+        sigmas=sigmas,
+        intensities=intensities,
+        diffusion_total_times=zero_diffusion_total_times,
+        diffusion_coefficients=zero_diffusion_coefficients,
+        diffusion_barrier_alpha=diffusion_barrier_alpha,
+        scaling_factor=scaling_factor,
+        diffusion_downsample=diffusion_downsample,
+        max_sigma_lowres=max_sigma_lowres,
+    )
+
+    generated_preopt = generate_all_channels(
+        num_channels=num_channels,
+        channel_generator=preopt_generator,
+        max_workers=generation_max_workers,
+    )
+
+    if plotting_enabled:
+        print("Plotting initial no-optimization comparison")
+        l1_errors_by_step["initial_no_optimization"] = plot_channel_comparison(
+            msi=msi,
+            generated=generated_preopt,
+            channels_to_show=channels_to_show,
+            output_path=os.path.join(output_dir, "target_v_initial.png"),
+            title="Initial comparison before sigma optimization",
+            channel_labels=original_channel_numbers,
+        )
+
+    print("Optimizing sigmas")
     sigmas = parallel_sigma_optimisation(
         cell_indexes=cell_indexes,
         cell_masks=cell_masks,
@@ -733,40 +840,40 @@ if __name__ == "__main__":
         sigmas=sigmas,
         intensities=intensities,
         scaling_factor=scaling_factor,
-        max_workers=4,
+        max_workers=sigma_max_workers,
     )
 
-    diffusion_total_times = [0.0] * num_channels
-    diffusion_coefficients = [0.0] * num_channels
-
-    initial_generator = make_channel_generator(
+    print("Generating no-diffusion simulation after sigma optimization")
+    optimized_generator = make_channel_generator(
         mask=mask,
         sigmas=sigmas,
         intensities=intensities,
-        diffusion_total_times=diffusion_total_times,
-        diffusion_coefficients=diffusion_coefficients,
+        diffusion_total_times=zero_diffusion_total_times,
+        diffusion_coefficients=zero_diffusion_coefficients,
         diffusion_barrier_alpha=diffusion_barrier_alpha,
         scaling_factor=scaling_factor,
-        diffusion_downsample=8,
-        max_sigma_lowres=15.0,
+        diffusion_downsample=diffusion_downsample,
+        max_sigma_lowres=max_sigma_lowres,
     )
 
-    generated = generate_all_channels(
+    generated_optimized = generate_all_channels(
         num_channels=num_channels,
-        channel_generator=initial_generator,
-        max_workers=1,
+        channel_generator=optimized_generator,
+        max_workers=generation_max_workers,
     )
 
-    print_channel_stats(msi, generated, "Initial no-diffusion stats after sigma optimization")
+    if plotting_enabled:
+        print("Plotting optimized-sigma comparison")
+        l1_errors_by_step["initial_no_diffusion"] = plot_channel_comparison(
+            msi=msi,
+            generated=generated_optimized,
+            channels_to_show=channels_to_show,
+            output_path=os.path.join(output_dir, "target_v_optimal_sigma.png"),
+            title="Initial comparison after sigma optimization",
+            channel_labels=original_channel_numbers,
+        )
 
-    plot_channel_comparison(
-        msi=msi,
-        generated=generated,
-        channels_to_show=channels_to_show,
-        output_path="output/target_v_initial_multi.png",
-        title="Initial comparison after sigma optimization",
-    )
-
+    print("Estimating diffusion coefficients")
     mus = estimate_channel_mus(
         msi=msi,
         mask=mask,
@@ -774,66 +881,114 @@ if __name__ == "__main__":
         num_channels=num_channels,
     )
 
-    diffusion_total_times = [1.0] * num_channels
+    print("Preparing diffusion parameters")
+    t = float(diffusion_total_time)
+    diffusion_dt_1d = np.full(num_channels, t, dtype=np.float64)
 
-    diffusion_coefficients = [
-        float(mu_c["mu_est"])
-        for mu_c in mus
-    ]
+    diffusion_coefficients_1d = np.asarray(
+        [float(mu_c["mu_est"]) for mu_c in mus],
+        dtype=np.float64,
+    )
 
-    for c, D in enumerate(diffusion_coefficients):
-        T = diffusion_total_times[c]
-        print(
-            f"Channel {c}: "
-            f"D={D:.6f}, "
-            f"T={T:.6f}, "
-            f"D*T={D * T:.6f}, "
-            f"sigma_px={np.sqrt(2.0 * D * T):.6f}"
-        )
-
+    print("Scaling intensities to target totals")
     intensities = scale_intensities_to_target_totals(
         intensities=intensities,
         msi=msi,
     )
 
+    print("Generating mu-based diffusion simulation")
     mu_generator = make_channel_generator(
         mask=mask,
         sigmas=sigmas,
         intensities=intensities,
-        diffusion_total_times=diffusion_total_times,
-        diffusion_coefficients=diffusion_coefficients,
+        diffusion_total_times=diffusion_dt_1d.tolist(),
+        diffusion_coefficients=diffusion_coefficients_1d.tolist(),
         diffusion_barrier_alpha=diffusion_barrier_alpha,
         scaling_factor=scaling_factor,
-        diffusion_downsample=8,
-        max_sigma_lowres=15.0,
+        diffusion_downsample=diffusion_downsample,
+        max_sigma_lowres=max_sigma_lowres,
     )
 
-    generated = generate_all_channels(
+    generated_mu = generate_all_channels(
         num_channels=num_channels,
         channel_generator=mu_generator,
-        max_workers=1,
+        max_workers=generation_max_workers,
     )
 
-    print_channel_stats(msi, generated, "Mu-based diffusion stats")
+    if plotting_enabled:
+        print("Plotting mu-based diffusion comparison")
+        l1_errors_by_step["mu_diffusion"] = plot_channel_comparison(
+            msi=msi,
+            generated=generated_mu,
+            channels_to_show=channels_to_show,
+            output_path=os.path.join(output_dir, "target_v_diffusion.png"),
+            title="Mu-based diffusion comparison",
+            channel_labels=original_channel_numbers,
+        )
 
-    plot_channel_comparison(
-        msi=msi,
-        generated=generated,
-        channels_to_show=channels_to_show,
-        output_path="output/target_v_mu_diffusion_multi.png",
-        title="Mu-based diffusion comparison",
-    )
+    if apply_final_noise:
+        print("Applying final noise model")
+        generated_final = apply_noise_model(
+            generated_mu,
+            msi,
+            seed=noise_seed,
+            rank_match=noise_rank_match,
+        )
 
-    generated = apply_noise_model(
-        generated,
+        if plotting_enabled:
+            print("Plotting final noise comparison")
+            l1_errors_by_step["mu_diffusion_noise"] = plot_channel_comparison(
+                msi=msi,
+                generated=generated_final,
+                channels_to_show=channels_to_show,
+                output_path=os.path.join(output_dir, "target_v_final.png"),
+                title="Mu-based diffusion + noise comparison",
+                channel_labels=original_channel_numbers,
+            )
+
+    if plotting_enabled and l1_errors_by_step:
+        print("Saving L1 errors")
+        save_l1_errors(
+            l1_errors_by_step=l1_errors_by_step,
+            output_dir=output_dir,
+            filename="l1_errors_by_channel.csv",
+        )
+
+    print("Preparing return values")
+    intensities_2d = np.asarray(intensities, dtype=np.float64)
+    sigmas_2d = np.asarray(sigmas, dtype=np.float64)
+
+    print("Parameter estimation finished")
+
+    return intensities_2d, sigmas_2d, diffusion_coefficients_1d, diffusion_dt_1d, t
+
+
+if __name__ == "__main__":
+    original_channels_to_show = list(range(0, 89))
+
+    mask = np.load("input/seg.npy").astype(np.int32)
+    msi = np.load("input/msi_data.npy")[:, :, original_channels_to_show]
+
+    p = np.percentile(msi, 99, axis=(0, 1), keepdims=True)
+    msi = np.clip(msi, 0, p)
+
+    # Optional crop
+    mask, msi = crop_canvas_and_msi(
+        mask,
         msi,
-        rank_match=True,
+        top=110,
+        bottom=110,
+        left=100,
+        right=100,
     )
 
-    plot_channel_comparison(
+    intensities, sigmas, diffusion_coefficients, diffusion_dt, t = estimate_parameters(
+        mask=mask,
         msi=msi,
-        generated=generated,
-        channels_to_show=channels_to_show,
-        output_path="output/target_v_final.png",
-        title="Mu-based diffusion + noise comparison",
+        original_channel_numbers=original_channels_to_show,
+        plotting_enabled=True,
+        output_dir="output",
+        sigma_max_workers=4,
+        generation_max_workers=1,
+        diffusion_total_time=1.0,
     )
