@@ -964,7 +964,7 @@ def estimate_parameters(
 
 
 if __name__ == "__main__":
-    original_channels_to_show = list(range(0, 89))
+    original_channels_to_show = list(range(88, 89))
 
     mask = np.load("input/seg.npy").astype(np.int32)
     msi = np.load("input/msi_data.npy")[:, :, original_channels_to_show]
