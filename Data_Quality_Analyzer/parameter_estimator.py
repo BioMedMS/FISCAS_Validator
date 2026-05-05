@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import skimage.measure
 from concurrent.futures import ThreadPoolExecutor
 
-from canvas_generation import generate_msi_from_mask_slice
+from canvas_generation import generate_msi_from_mask_slice, _choose_cell_center_from_mask_and_target
 from diffusion_estimator import estimate_mu_from_distribution
 
 
@@ -175,7 +175,7 @@ def build_initial_sigmas_and_intensities(
     return sigmas, intensities
 
 
-def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor):
+def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor, target=None):
     sf = int(scaling_factor)
 
     coords = np.argwhere(cell_mask == cell_id)
@@ -188,7 +188,16 @@ def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor)
 
     sigma = max(float(sigma), 1e-6)
 
-    cy, cx = coords.mean(axis=0)
+    center = _choose_cell_center_from_mask_and_target(
+        local_mask=(cell_mask == cell_id),
+        target_patch=target,
+        scaling_factor=scaling_factor,
+    )
+
+    if center is None:
+        cy, cx = coords.mean(axis=0)
+    else:
+        cy, cx = center
 
     yy = coords[:, 0].astype(np.float32)
     xx = coords[:, 1].astype(np.float32)
@@ -277,6 +286,7 @@ def optimize_single_sigma(
             sigma=local_sigmas[local_idx],
             intensity=local_intensities[local_idx],
             scaling_factor=scaling_factor,
+            target=target,
         )
 
         rendered_cells.append(rendered)
@@ -302,6 +312,7 @@ def optimize_single_sigma(
             sigma=float(sigma),
             intensity=local_intensities[target_local_idx],
             scaling_factor=scaling_factor,
+            target=target,
         )
 
         generated = baseline.copy()
@@ -450,6 +461,7 @@ def make_channel_generator(
     scaling_factor,
     diffusion_downsample=8,
     max_sigma_lowres=15.0,
+    target_msi=None,
 ):
     def _generate_channel(c):
         return generate_msi_from_mask_slice(
@@ -465,6 +477,7 @@ def make_channel_generator(
             ms_spacing=scaling_factor,
             diffusion_downsample=diffusion_downsample,
             max_sigma_lowres=max_sigma_lowres,
+            target_canvas=(target_msi[:, :, c] if target_msi is not None else None),
         )
 
     return _generate_channel
@@ -1046,6 +1059,7 @@ def estimate_parameters(
         scaling_factor=scaling_factor,
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
+        target_msi=msi,
     )
 
     generated_preopt = generate_all_channels(
@@ -1087,6 +1101,7 @@ def estimate_parameters(
         scaling_factor=scaling_factor,
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
+        target_msi=msi,
     )
 
     generated_optimized = generate_all_channels(
@@ -1148,6 +1163,7 @@ def estimate_parameters(
         scaling_factor=scaling_factor,
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
+        target_msi=msi,
     )
 
     generated_mu = generate_all_channels(

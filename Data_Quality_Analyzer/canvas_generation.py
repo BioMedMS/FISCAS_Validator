@@ -1,7 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import skimage
-from scipy.ndimage import gaussian_filter, zoom
+from scipy.ndimage import gaussian_filter, zoom, distance_transform_edt
 
 
 def _block_reduce_sum_exact(arr, block):
@@ -219,6 +219,7 @@ def diffuse_mask_2d(
     mic_spacing=1.0,
     downsample=8,
     max_sigma_lowres=10.0,
+    target_canvas=None,
 ):
     """
     Fast approximate masked diffusion.
@@ -274,6 +275,89 @@ def diffuse_mask_2d(
     return diffused.astype(np.float32, copy=False)
 
 
+
+def _choose_cell_center_from_mask_and_target(local_mask, target_patch=None, scaling_factor=None):
+    """
+    Pick a center for one cell using both the cell geometry and the target.
+
+    Strategy:
+      1. Restrict the search to the cell pixels.
+      2. If a target patch is available, map it to the cell grid and find the cell's
+         global maximum inside the target.
+      3. If several pixels are tied / nearly tied, prefer the flattest point
+         (smallest gradient magnitude) and then the most interior point
+         (largest distance-to-boundary).
+      4. Fall back to the mask interior maximum if no target support is available.
+    """
+    local_mask = np.asarray(local_mask, dtype=bool)
+    coords = np.argwhere(local_mask)
+
+    if coords.shape[0] == 0:
+        return None
+
+    interior_distance = distance_transform_edt(local_mask).astype(np.float32)
+
+    if target_patch is None:
+        best_idx = np.argmax(interior_distance[coords[:, 0], coords[:, 1]])
+        cy, cx = coords[best_idx]
+        return float(cy), float(cx)
+
+    target_patch = np.asarray(target_patch, dtype=np.float32)
+
+    if target_patch.ndim != 2 or target_patch.size == 0:
+        best_idx = np.argmax(interior_distance[coords[:, 0], coords[:, 1]])
+        cy, cx = coords[best_idx]
+        return float(cy), float(cx)
+
+    if scaling_factor is None or scaling_factor <= 1:
+        sf = 1
+    else:
+        sf = int(scaling_factor)
+
+    # Paint the target values onto the high-resolution local cell grid.
+    hr_target = np.repeat(np.repeat(target_patch, sf, axis=0), sf, axis=1)
+    hr_target = hr_target[:local_mask.shape[0], :local_mask.shape[1]]
+
+    if hr_target.shape != local_mask.shape:
+        padded = np.zeros(local_mask.shape, dtype=np.float32)
+        padded[:hr_target.shape[0], :hr_target.shape[1]] = hr_target
+        hr_target = padded
+
+    masked_target = np.where(local_mask, hr_target, -np.inf)
+
+    finite_values = masked_target[np.isfinite(masked_target)]
+    if finite_values.size == 0:
+        best_idx = np.argmax(interior_distance[coords[:, 0], coords[:, 1]])
+        cy, cx = coords[best_idx]
+        return float(cy), float(cx)
+
+    max_value = float(np.max(finite_values))
+
+    if not np.isfinite(max_value):
+        best_idx = np.argmax(interior_distance[coords[:, 0], coords[:, 1]])
+        cy, cx = coords[best_idx]
+        return float(cy), float(cx)
+
+    # Allow a tiny tolerance so flat maxima / quantized peaks are handled robustly.
+    tol = max(1e-8, abs(max_value) * 1e-6)
+    peak_mask = local_mask & (hr_target >= (max_value - tol))
+    peak_coords = np.argwhere(peak_mask)
+
+    if peak_coords.shape[0] == 0:
+        peak_coords = coords
+
+    gy, gx = np.gradient(np.where(local_mask, hr_target, 0.0).astype(np.float32))
+    grad_mag = np.sqrt(gx * gx + gy * gy)
+
+    peak_grad = grad_mag[peak_coords[:, 0], peak_coords[:, 1]]
+    peak_dist = interior_distance[peak_coords[:, 0], peak_coords[:, 1]]
+
+    order = np.lexsort((-peak_dist, peak_grad))
+    cy, cx = peak_coords[order[0]]
+
+    return float(cy), float(cx)
+
+
 def generate_msi_from_existing_mask(
     mask_canvas,
     ms_spacing,
@@ -289,6 +373,7 @@ def generate_msi_from_existing_mask(
     use_gpu=True,
     diffusion_downsample=8,
     max_sigma_lowres=10.0,
+    target_canvas=None,
 ):
     if mask_canvas.ndim != 2:
         raise ValueError("mask_canvas must be a 2D labeled mask")
@@ -345,7 +430,27 @@ def generate_msi_from_existing_mask(
         intensities_map = np.zeros(local_mask.shape, dtype=np.float32)
 
         if coords.shape[0] > 0:
-            cy_local, cx_local = coords.mean(axis=0)
+            local_target = None
+            local_sf = None
+
+            if target_canvas is not None:
+                local_sf = int(ms_spacing / mic_spacing)
+                ty0 = y0 // local_sf
+                ty1 = int(np.ceil(y1 / local_sf))
+                tx0 = x0 // local_sf
+                tx1 = int(np.ceil(x1 / local_sf))
+                local_target = np.asarray(target_canvas[ty0:ty1, tx0:tx1], dtype=np.float32)
+
+            center = _choose_cell_center_from_mask_and_target(
+                local_mask=local_mask,
+                target_patch=local_target,
+                scaling_factor=local_sf,
+            )
+
+            if center is None:
+                cy_local, cx_local = coords.mean(axis=0)
+            else:
+                cy_local, cx_local = center
 
             yy = coords[:, 0].astype(np.float32)
             xx = coords[:, 1].astype(np.float32)
@@ -366,8 +471,30 @@ def generate_msi_from_existing_mask(
 
         cell_canvas[y0:y1, x0:x1] += msi_cell
 
-        cx = xs.mean()
-        cy = ys.mean()
+        local_target = None
+        local_sf = None
+
+        if target_canvas is not None:
+            local_sf = int(ms_spacing / mic_spacing)
+            ty0 = y0 // local_sf
+            ty1 = int(np.ceil(y1 / local_sf))
+            tx0 = x0 // local_sf
+            tx1 = int(np.ceil(x1 / local_sf))
+            local_target = np.asarray(target_canvas[ty0:ty1, tx0:tx1], dtype=np.float32)
+
+        center = _choose_cell_center_from_mask_and_target(
+            local_mask=local_mask,
+            target_patch=local_target,
+            scaling_factor=local_sf,
+        )
+
+        if center is None:
+            cx = xs.mean()
+            cy = ys.mean()
+        else:
+            cy_local, cx_local = center
+            cx = x0 + cx_local
+            cy = y0 + cy_local
 
         msi_coordinates[cell_id] = (
             int(round(cx * mic_to_ms)),
@@ -424,6 +551,7 @@ def generate_msi_from_mask_slice(
     ms_spacing=None,
     diffusion_downsample=8,
     max_sigma_lowres=10.0,
+    target_canvas=None,
 ):
     if mask_slice.ndim != 2:
         raise ValueError("mask_slice must be a 2D labeled mask")
@@ -464,7 +592,27 @@ def generate_msi_from_mask_slice(
         if coords.shape[0] == 0:
             continue
 
-        cy, cx = coords.mean(axis=0)
+        local_target = None
+        local_sf = None
+
+        if target_canvas is not None and ms_spacing is not None:
+            local_sf = int(ms_spacing / mic_spacing)
+            ty0 = y0 // local_sf
+            ty1 = int(np.ceil(y1 / local_sf))
+            tx0 = x0 // local_sf
+            tx1 = int(np.ceil(x1 / local_sf))
+            local_target = np.asarray(target_canvas[ty0:ty1, tx0:tx1], dtype=np.float32)
+
+        center = _choose_cell_center_from_mask_and_target(
+            local_mask=local_mask,
+            target_patch=local_target,
+            scaling_factor=local_sf,
+        )
+
+        if center is None:
+            cy, cx = coords.mean(axis=0)
+        else:
+            cy, cx = center
 
         yy = coords[:, 0].astype(np.float32)
         xx = coords[:, 1].astype(np.float32)
