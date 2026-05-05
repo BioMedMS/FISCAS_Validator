@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
+from matplotlib.gridspec import GridSpec
 import skimage.measure
 from concurrent.futures import ThreadPoolExecutor
 
@@ -387,62 +388,6 @@ def parallel_sigma_optimisation(
 
     return optimized_sigmas
 
-
-def scale_intensities_to_target_totals(intensities, msi):
-    num_channels = msi.shape[-1]
-
-    for c in range(num_channels):
-        target_total = float(msi[:, :, c].sum())
-        current_total = float(np.sum(intensities[c]))
-
-        if current_total > 0:
-            intensity_scale = target_total / current_total
-            intensities[c] = [float(x) * intensity_scale for x in intensities[c]]
-
-    return intensities
-
-
-def estimate_channel_mus(
-    msi,
-    mask,
-    scaling_factor,
-    num_channels,
-    diffusion_estimation_power=2.0,
-    diffusion_inner_boundary_px=2,
-    diffusion_outer_boundary_px=2,
-    diffusion_far_background_inner_px=8,
-    diffusion_far_background_outer_px=20,
-    diffusion_intracellular_fraction=0.25,
-    diffusion_min_cell_pixels=5,
-    diffusion_max_mu=None,
-):
-    mus = []
-
-    for c in range(num_channels):
-        msi_hr_c = np.repeat(
-            np.repeat(msi[:, :, c], scaling_factor, axis=0),
-            scaling_factor,
-            axis=1,
-        )
-
-        mu_c = estimate_mu_from_distribution(
-            distribution=msi_hr_c,
-            patch_mask=mask,
-            estimation_power=diffusion_estimation_power,
-            inner_boundary_px=diffusion_inner_boundary_px,
-            outer_boundary_px=diffusion_outer_boundary_px,
-            far_background_inner_px=diffusion_far_background_inner_px,
-            far_background_outer_px=diffusion_far_background_outer_px,
-            intracellular_diffusion_fraction=diffusion_intracellular_fraction,
-            min_cell_pixels=diffusion_min_cell_pixels,
-            max_mu=diffusion_max_mu,
-        )
-
-        mus.append(mu_c)
-
-    return mus
-
-
 def _value_for_channel(values, c):
     if np.isscalar(values):
         return float(values)
@@ -510,107 +455,226 @@ def _channel_suffix(channel_index, channel_labels=None):
 
     return str(label)
 
+def relabel_mask_for_display(mask):
+    """Relabel arbitrary cell IDs to consecutive integers for display."""
+    mask = np.asarray(mask)
+    cell_ids = np.unique(mask)
+    cell_ids = cell_ids[cell_ids > 0]
 
-def _channel_output_path(output_dir, base_filename, channel_number):
-    stem, ext = os.path.splitext(os.path.basename(base_filename))
+    relabeled = np.zeros_like(mask, dtype=np.int32)
 
-    return os.path.join(output_dir, f"{stem}_channel{channel_number}{ext}")
+    for new_id, old_id in enumerate(cell_ids, start=1):
+        relabeled[mask == old_id] = new_id
 
-
-def plot_mask(mask, output_path, title="Segmentation mask"):
-    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-
-    fig, ax = plt.subplots(figsize=(5.0, 5.0), constrained_layout=True)
-    im = ax.imshow(mask, cmap="nipy_spectral", interpolation="nearest")
-    ax.set_title(title, fontsize=11)
-    ax.axis("off")
-    fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
-    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.02)
-    plt.close(fig)
+    return relabeled
 
 
-def plot_single_channel_comparison(msi, generated, channel_idx, output_path, title, channel_number=None):
-    channel_number = channel_idx if channel_number is None else channel_number
-
-    target_ch = msi[:, :, channel_idx]
-    generated_ch = generated[:, :, channel_idx]
-    layer_l1 = symmetric_l1_ratio(target_ch, generated_ch)
-
-    vmin = min(float(target_ch.min()), float(generated_ch.min()))
-    vmax = max(float(target_ch.max()), float(generated_ch.max()))
-
-    fig, axes = plt.subplots(
-        1,
-        2,
-        figsize=(7.0, 3.4),
-        gridspec_kw={"wspace": 0.0},
-        constrained_layout=False,
-    )
-
-    axes[0].imshow(
-        target_ch,
-        cmap="viridis",
-        vmin=vmin,
-        vmax=vmax,
-        aspect="equal",
-        interpolation="nearest",
-    )
-    axes[0].set_title("Target", fontsize=10, pad=2)
-    axes[0].axis("off")
-
-    im1 = axes[1].imshow(
-        generated_ch,
-        cmap="viridis",
-        vmin=vmin,
-        vmax=vmax,
-        aspect="equal",
-        interpolation="nearest",
-    )
-    axes[1].set_title("Simulation", fontsize=10, pad=2)
-    axes[1].axis("off")
-
-    fig.suptitle(
-        f"{title} | Channel {channel_number} | L1: {layer_l1:.6f}",
-        fontsize=11,
-        y=0.98,
-    )
-
-    fig.subplots_adjust(left=0.005, right=0.90, bottom=0.005, top=0.88, wspace=0.0)
-    cbar = fig.colorbar(
-        im1,
-        ax=axes.ravel().tolist(),
-        location="right",
-        shrink=0.92,
-        pad=0.01,
-    )
-    cbar.ax.tick_params(labelsize=8)
-
-    fig.savefig(output_path, dpi=300, bbox_inches="tight", pad_inches=0.02)
-    plt.close(fig)
-
-    return layer_l1
-
-
-def plot_channel_comparison(msi, generated, channels_to_show, output_path, title, channel_labels=None):
-    output_dir = os.path.dirname(output_path) or "."
-    os.makedirs(output_dir, exist_ok=True)
-
+def compute_channel_l1_errors(msi, generated, channels_to_show, channel_labels=None):
+    """Compute per-channel symmetric L1 errors without plotting intermediates."""
     l1_errors = {}
 
     for ch in channels_to_show:
         channel_number = _channel_suffix(ch, channel_labels)
-        channel_output_path = _channel_output_path(output_dir, output_path, channel_number)
+        target_ch = msi[:, :, ch]
+        generated_ch = generated[:, :, ch]
+        l1_errors[channel_number] = symmetric_l1_ratio(target_ch, generated_ch)
 
-        l1_errors[channel_number] = plot_single_channel_comparison(
-            msi=msi,
-            generated=generated,
+    return l1_errors
+
+
+def plot_channel_pipeline_summary(
+    mask,
+    step_images,
+    channel_idx,
+    output_path,
+    title="MSI generation pipeline",
+    channel_number=None,
+):
+    """
+    Render one final summary figure for one channel.
+
+    Layout:
+        [Mask | Initial | Sigma-opt | Mu-diffusion | Final | Target | Colorbar]
+
+    The panel widths are derived from the true image aspect ratios, so the figure
+    always fits the rendered content. Extra space is reserved on the far right so
+    colorbar tick labels up to 5 digits do not get cut off.
+    """
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+
+    if channel_number is None:
+        channel_number = channel_idx
+
+    mask_display = relabel_mask_for_display(mask)
+    mask_display = np.ma.masked_where(mask_display == 0, mask_display)
+
+    mask_cmap = plt.get_cmap("nipy_spectral").copy()
+    mask_cmap.set_bad(color="black")
+
+    target = np.asarray(step_images["Target"], dtype=np.float32)[:, :, channel_idx]
+    initial = np.asarray(step_images["Initial"], dtype=np.float32)[:, :, channel_idx]
+    sigma_opt = np.asarray(step_images["Sigma-opt"], dtype=np.float32)[:, :, channel_idx]
+    mu_diff = np.asarray(step_images["Mu-diffusion"], dtype=np.float32)[:, :, channel_idx]
+    final = np.asarray(step_images["Final"], dtype=np.float32)[:, :, channel_idx]
+
+    panel_data = [
+        ("Mask", mask_display, None, True),
+        ("Initial", initial, symmetric_l1_ratio(target, initial), False),
+        ("Sigma-opt", sigma_opt, symmetric_l1_ratio(target, sigma_opt), False),
+        ("Mu-diffusion", mu_diff, symmetric_l1_ratio(target, mu_diff), False),
+        ("Final", final, symmetric_l1_ratio(target, final), False),
+        ("Target", target, None, False),
+    ]
+
+    intensity_images = [initial, sigma_opt, mu_diff, final, target]
+    vmin = min(float(img.min()) for img in intensity_images)
+    vmax = max(float(img.max()) for img in intensity_images)
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+
+    # Layout parameters (style only, not fake canvas sizing)
+    left_margin = 0.20
+    right_margin = 0.06
+    bottom_margin = 0.18
+    top_margin = 0.10
+
+    title_band = 0.42
+    subplot_title_band = 0.34
+
+    panel_gap = 0.05
+    cbar_gap = 0.06
+    cbar_width = 0.12
+
+    # Extra space so cbar tick labels like 12345 are not clipped
+    cbar_tick_label_space = 0.50
+
+    # Common rendered image height; widths are derived from true aspect ratios
+    panel_height = 3.00
+
+    panel_widths = []
+    for _, img, _, _ in panel_data:
+        h, w = img.shape[:2]
+        aspect = float(w) / float(h)
+        panel_widths.append(panel_height * aspect)
+
+    fig_width = (
+        left_margin
+        + sum(panel_widths)
+        + panel_gap * (len(panel_widths) - 1)
+        + cbar_gap
+        + cbar_width
+        + cbar_tick_label_space
+        + right_margin
+    )
+
+    fig_height = (
+        bottom_margin
+        + panel_height
+        + subplot_title_band
+        + title_band
+        + top_margin
+    )
+
+    fig = plt.figure(figsize=(fig_width, fig_height), dpi=200, constrained_layout=False)
+
+    total_w = fig_width
+    total_h = fig_height
+
+    panel_bottom = bottom_margin / total_h
+    panel_h = panel_height / total_h
+
+    x = left_margin / total_w
+    axes = []
+
+    for panel_w in panel_widths:
+        ax = fig.add_axes([
+            x,
+            panel_bottom,
+            panel_w / total_w,
+            panel_h,
+        ])
+        axes.append(ax)
+        x += (panel_w + panel_gap) / total_w
+
+    cax = fig.add_axes([
+        x + cbar_gap / total_w,
+        panel_bottom,
+        cbar_width / total_w,
+        panel_h,
+    ])
+
+    im = None
+
+    for ax, (name, img, l1, is_mask) in zip(axes, panel_data):
+        if is_mask:
+            ax.imshow(
+                img,
+                cmap=mask_cmap,
+                interpolation="nearest",
+                aspect="equal",
+            )
+            ax.set_facecolor("black")
+            ax.set_title("Mask", fontsize=10, pad=6)
+        else:
+            im = ax.imshow(
+                img,
+                cmap="viridis",
+                vmin=vmin,
+                vmax=vmax,
+                interpolation="nearest",
+                aspect="equal",
+            )
+
+            if name == "Target":
+                ax.set_title("Target", fontsize=10, pad=6)
+            else:
+                ax.set_title(f"{name}\nL1: {l1:.4f}", fontsize=9, pad=6)
+
+        ax.axis("off")
+
+    cbar = fig.colorbar(im, cax=cax)
+    cbar.ax.tick_params(labelsize=8)
+
+    fig.suptitle(
+        f"{title} | Channel {channel_number}",
+        fontsize=15,
+        y=1.0 - top_margin / fig_height,
+    )
+
+    # Do not use bbox_inches="tight" here; it can mess up manual spacing.
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+def plot_final_channel_summaries(
+    mask,
+    step_images,
+    channels_to_show,
+    output_dir,
+    channel_labels=None,
+    base_filename="pipeline_summary",
+    title="MSI generation pipeline",
+):
+    """Create exactly one final render per requested channel."""
+    os.makedirs(output_dir, exist_ok=True)
+
+    output_paths = []
+
+    for ch in channels_to_show:
+        channel_number = _channel_suffix(ch, channel_labels)
+        output_path = os.path.join(output_dir, f"{base_filename}_channel{channel_number}.png")
+
+        plot_channel_pipeline_summary(
+            mask=mask,
+            step_images=step_images,
             channel_idx=ch,
-            output_path=channel_output_path,
+            output_path=output_path,
             title=title,
             channel_number=channel_number,
         )
 
-    return l1_errors
+        output_paths.append(output_path)
+
+    return output_paths
 
 
 def save_l1_errors(l1_errors_by_step, output_dir, filename="l1_errors_by_channel.csv"):
@@ -1012,16 +1076,6 @@ def estimate_parameters(
                 f"Got {ch}, but sliced MSI has {num_channels} channels."
             )
 
-    if plotting_enabled:
-        print("Plotting segmentation mask")
-        os.makedirs(output_dir, exist_ok=True)
-
-        plot_mask(
-            mask=mask,
-            output_path=os.path.join(output_dir, "mask.png"),
-            title="Segmentation mask",
-        )
-
     l1_errors_by_step = {}
 
     print("Computing scaling factor")
@@ -1069,13 +1123,11 @@ def estimate_parameters(
     )
 
     if plotting_enabled:
-        print("Plotting initial no-optimization comparison")
-        l1_errors_by_step["initial_no_optimization"] = plot_channel_comparison(
+        print("Computing initial no-optimization errors")
+        l1_errors_by_step["initial_no_optimization"] = compute_channel_l1_errors(
             msi=msi,
             generated=generated_preopt,
             channels_to_show=channels_to_show,
-            output_path=os.path.join(output_dir, "target_v_initial.png"),
-            title="Initial comparison before sigma optimization",
             channel_labels=channel_labels,
         )
 
@@ -1111,13 +1163,11 @@ def estimate_parameters(
     )
 
     if plotting_enabled:
-        print("Plotting optimized-sigma comparison")
-        l1_errors_by_step["initial_no_diffusion"] = plot_channel_comparison(
+        print("Computing optimized-sigma errors")
+        l1_errors_by_step["initial_no_diffusion"] = compute_channel_l1_errors(
             msi=msi,
             generated=generated_optimized,
             channels_to_show=channels_to_show,
-            output_path=os.path.join(output_dir, "target_v_optimal_sigma.png"),
-            title="Initial comparison after sigma optimization",
             channel_labels=channel_labels,
         )
 
@@ -1173,13 +1223,11 @@ def estimate_parameters(
     )
 
     if plotting_enabled:
-        print("Plotting barrier-aware mu-based diffusion comparison")
-        l1_errors_by_step["mu_diffusion"] = plot_channel_comparison(
+        print("Computing barrier-aware mu-based diffusion errors")
+        l1_errors_by_step["mu_diffusion"] = compute_channel_l1_errors(
             msi=msi,
             generated=generated_mu,
             channels_to_show=channels_to_show,
-            output_path=os.path.join(output_dir, "target_v_diffusion.png"),
-            title="Barrier-aware mu-based diffusion comparison",
             channel_labels=channel_labels,
         )
 
@@ -1193,15 +1241,38 @@ def estimate_parameters(
         )
 
         if plotting_enabled:
-            print("Plotting final noise comparison")
-            l1_errors_by_step["mu_diffusion_noise"] = plot_channel_comparison(
+            print("Computing final noise errors")
+            l1_errors_by_step["mu_diffusion_noise"] = compute_channel_l1_errors(
                 msi=msi,
                 generated=generated_final,
                 channels_to_show=channels_to_show,
-                output_path=os.path.join(output_dir, "target_v_final.png"),
-                title="Barrier-aware diffusion + noise comparison",
                 channel_labels=channel_labels,
             )
+
+    if plotting_enabled:
+        print("Rendering final per-channel pipeline summaries")
+
+        step_images = {
+            "Target": msi,
+            "Initial": generated_preopt,
+            "Sigma-opt": generated_optimized,
+            "Mu-diffusion": generated_mu,
+        }
+
+        if apply_final_noise:
+            step_images["Final"] = generated_final
+        else:
+            step_images["Final"] = generated_mu
+
+        plot_final_channel_summaries(
+            mask=mask,
+            step_images=step_images,
+            channels_to_show=channels_to_show,
+            output_dir=output_dir,
+            channel_labels=channel_labels,
+            base_filename="pipeline_summary",
+            title="MSI generation pipeline",
+        )
 
     if plotting_enabled and l1_errors_by_step:
         print("Saving L1 errors")
