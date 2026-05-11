@@ -8,7 +8,6 @@ from concurrent.futures import ThreadPoolExecutor
 from canvas_generation import generate_msi_from_mask_slice, _choose_cell_center_from_mask_and_target
 from diffusion_estimator import estimate_mu_from_distribution
 
-
 def symmetric_l1_ratio(a, b):
     a = np.asarray(a, dtype=float)
     b = np.asarray(b, dtype=float)
@@ -19,7 +18,6 @@ def symmetric_l1_ratio(a, b):
         return 0.0
 
     return float(np.sum(np.abs(a - b)) / denominator)
-
 
 def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
     scaling_factor = int(mask.shape[0] / msi.shape[0])
@@ -36,7 +34,6 @@ def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
     ]
 
     return new_mask, new_msi
-
 
 def get_cell_bounding_boxes(mask):
     cell_ids = np.unique(mask)
@@ -59,7 +56,6 @@ def get_cell_bounding_boxes(mask):
 
     return cell_ids.astype(np.int32), boxes
 
-
 def get_cell_neighbourhood_from_box(canvas, box, padding, scaling_factor):
     top0, bottom0, left0, right0 = box
 
@@ -81,7 +77,6 @@ def get_cell_neighbourhood_from_box(canvas, box, padding, scaling_factor):
     )
 
     return canvas[top:bottom, left:right], (left, right, top, bottom)
-
 
 def get_individual_cell_canvases(mask, msi_canvas, scaling_factor, padding):
     scaling_factor = int(scaling_factor)
@@ -113,7 +108,6 @@ def get_individual_cell_canvases(mask, msi_canvas, scaling_factor, padding):
 
     return cell_indexes, masks, targets
 
-
 def block_fraction_from_hr_mask(mask_i, scaling_factor, target_shape):
     sf = int(scaling_factor)
 
@@ -133,7 +127,6 @@ def block_fraction_from_hr_mask(mask_i, scaling_factor, target_shape):
     fractions = counts / float(sf * sf)
 
     return fractions[:target_shape[0], :target_shape[1]]
-
 
 def build_initial_sigmas_and_intensities(
     cell_indexes,
@@ -174,7 +167,6 @@ def build_initial_sigmas_and_intensities(
             sigmas[c].append(cell_target.shape[0] * scaling_factor)
 
     return sigmas, intensities
-
 
 def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor, target=None):
     sf = int(scaling_factor)
@@ -229,13 +221,11 @@ def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor,
 
     return ms
 
-
 def crop_same_shape(a, b):
     h = min(a.shape[0], b.shape[0])
     w = min(a.shape[1], b.shape[1])
 
     return a[:h, :w], b[:h, :w]
-
 
 def optimize_single_sigma(
     i,
@@ -336,7 +326,6 @@ def optimize_single_sigma(
 
     return best_sigma
 
-
 def parallel_sigma_optimisation(
     cell_indexes,
     cell_masks,
@@ -395,7 +384,6 @@ def _value_for_channel(values, c):
     values = list(values)
     return float(values[c])
 
-
 def make_channel_generator(
     mask,
     sigmas,
@@ -427,7 +415,6 @@ def make_channel_generator(
 
     return _generate_channel
 
-
 def generate_all_channels(num_channels, channel_generator, max_workers=None):
     if max_workers == 1:
         generated_channels = [
@@ -439,7 +426,6 @@ def generate_all_channels(num_channels, channel_generator, max_workers=None):
             generated_channels = list(executor.map(channel_generator, range(num_channels)))
 
     return np.stack(generated_channels, axis=-1)
-
 
 def _channel_suffix(channel_index, channel_labels=None):
     if channel_labels is None:
@@ -468,7 +454,6 @@ def relabel_mask_for_display(mask):
 
     return relabeled
 
-
 def compute_channel_l1_errors(msi, generated, channels_to_show, channel_labels=None):
     """Compute per-channel symmetric L1 errors without plotting intermediates."""
     l1_errors = {}
@@ -480,7 +465,6 @@ def compute_channel_l1_errors(msi, generated, channels_to_show, channel_labels=N
         l1_errors[channel_number] = symmetric_l1_ratio(target_ch, generated_ch)
 
     return l1_errors
-
 
 def plot_channel_pipeline_summary(
     mask,
@@ -494,7 +478,7 @@ def plot_channel_pipeline_summary(
     Render one final summary figure for one channel.
 
     Layout:
-        [Mask | Initial | Sigma-opt | Mu-diffusion | Final | Target | Colorbar]
+        [Mask | Initial | Sigma-opt | Mu-diffusion | Final | Sim-noise | Target | Colorbar]
 
     The panel widths are derived from the true image aspect ratios, so the figure
     always fits the rendered content. Extra space is reserved on the far right so
@@ -516,6 +500,7 @@ def plot_channel_pipeline_summary(
     sigma_opt = np.asarray(step_images["Sigma-opt"], dtype=np.float32)[:, :, channel_idx]
     mu_diff = np.asarray(step_images["Mu-diffusion"], dtype=np.float32)[:, :, channel_idx]
     final = np.asarray(step_images["Final"], dtype=np.float32)[:, :, channel_idx]
+    sim_noise = np.asarray(step_images["Sim-noise"], dtype=np.float32)[:, :, channel_idx]
 
     panel_data = [
         ("Mask", mask_display, None, True),
@@ -523,16 +508,17 @@ def plot_channel_pipeline_summary(
         ("Sigma-opt", sigma_opt, symmetric_l1_ratio(target, sigma_opt), False),
         ("Mu-diffusion", mu_diff, symmetric_l1_ratio(target, mu_diff), False),
         ("Final", final, symmetric_l1_ratio(target, final), False),
+        ("Sim-noise", sim_noise, symmetric_l1_ratio(target, sim_noise), False),
         ("Target", target, None, False),
     ]
 
-    intensity_images = [initial, sigma_opt, mu_diff, final, target]
+    intensity_images = [initial, sigma_opt, mu_diff, final, sim_noise, target]
     vmin = min(float(img.min()) for img in intensity_images)
     vmax = max(float(img.max()) for img in intensity_images)
     if vmax <= vmin:
         vmax = vmin + 1e-6
 
-    # Layout parameters (style only, not fake canvas sizing)
+    # Layout parameters
     left_margin = 0.20
     right_margin = 0.06
     bottom_margin = 0.18
@@ -641,10 +627,9 @@ def plot_channel_pipeline_summary(
         y=1.0 - top_margin / fig_height,
     )
 
-    # Do not use bbox_inches="tight" here; it can mess up manual spacing.
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
-
+    
 def plot_final_channel_summaries(
     mask,
     step_images,
@@ -676,7 +661,6 @@ def plot_final_channel_summaries(
 
     return output_paths
 
-
 def save_l1_errors(l1_errors_by_step, output_dir, filename="l1_errors_by_channel.csv"):
     os.makedirs(output_dir, exist_ok=True)
     output_path = os.path.join(output_dir, filename)
@@ -696,7 +680,6 @@ def save_l1_errors(l1_errors_by_step, output_dir, filename="l1_errors_by_channel
                     f.write(f"{step_name},{channel},{step_errors[channel]:.12g}\n")
 
     return output_path
-
 
 def apply_noise_model(canvas, target, seed=None, clip_nonnegative=True, rank_match=True):
     canvas = np.asarray(canvas, dtype=np.float32)
@@ -741,7 +724,6 @@ def apply_noise_model(canvas, target, seed=None, clip_nonnegative=True, rank_mat
 
     raise ValueError("canvas and target must be either 2D or 3D arrays.")
 
-
 def _apply_noise_model_single_channel(canvas_ch, target_ch, rng, rank_match=True):
     residual = target_ch - canvas_ch
     residual_flat = residual.ravel()
@@ -769,7 +751,6 @@ def _apply_noise_model_single_channel(canvas_ch, target_ch, rng, rank_match=True
 
     return canvas_ch + assigned_noise.reshape(residual.shape)
 
-
 def _csv_value(value):
     if value is None:
         return ""
@@ -781,7 +762,6 @@ def _csv_value(value):
         return f"{value:.12g}"
 
     return str(value)
-
 
 def save_parameter_summary(
     output_dir,
@@ -907,14 +887,12 @@ def estimate_median_cell_radius_ms(mask, scaling_factor):
 
     return float(np.median(np.asarray(radii_ms, dtype=np.float64)))
 
-
 def build_msi_mask_fraction(mask, scaling_factor, target_shape):
     return block_fraction_from_hr_mask(
         mask_i=(mask > 0),
         scaling_factor=scaling_factor,
         target_shape=target_shape,
     )
-
 
 def estimate_channel_mus(
     msi,
@@ -1231,23 +1209,42 @@ def estimate_parameters(
             channel_labels=channel_labels,
         )
 
-    if apply_final_noise:
-        print("Applying final noise model")
-        generated_final = apply_noise_model(
-            generated_mu,
-            msi,
-            seed=noise_seed,
-            rank_match=noise_rank_match,
-        )
-
-        if plotting_enabled:
-            print("Computing final noise errors")
-            l1_errors_by_step["mu_diffusion_noise"] = compute_channel_l1_errors(
-                msi=msi,
-                generated=generated_final,
-                channels_to_show=channels_to_show,
-                channel_labels=channel_labels,
+        if apply_final_noise:
+            print("Applying final noise model")
+            generated_final = apply_noise_model(
+                generated_mu,
+                msi,
+                seed=noise_seed,
+                rank_match=noise_rank_match,
             )
+
+            print("Applying simulation-style random Gaussian noise")
+            generated_sim_noise = apply_noise_model(
+                generated_mu,
+                msi,
+                seed=noise_seed,
+                rank_match=False,
+            )
+
+            if plotting_enabled:
+                print("Computing final noise errors")
+                l1_errors_by_step["mu_diffusion_noise"] = compute_channel_l1_errors(
+                    msi=msi,
+                    generated=generated_final,
+                    channels_to_show=channels_to_show,
+                    channel_labels=channel_labels,
+                )
+
+                print("Computing simulation-style random noise errors")
+                l1_errors_by_step["mu_diffusion_sim_noise"] = compute_channel_l1_errors(
+                    msi=msi,
+                    generated=generated_sim_noise,
+                    channels_to_show=channels_to_show,
+                    channel_labels=channel_labels,
+                )
+        else:
+            generated_final = generated_mu
+            generated_sim_noise = generated_mu
 
     if plotting_enabled:
         print("Rendering final per-channel pipeline summaries")
@@ -1257,6 +1254,8 @@ def estimate_parameters(
             "Initial": generated_preopt,
             "Sigma-opt": generated_optimized,
             "Mu-diffusion": generated_mu,
+            "Final": generated_final,
+            "Sim-noise": generated_sim_noise,
         }
 
         if apply_final_noise:
@@ -1314,7 +1313,6 @@ def estimate_parameters(
         diffusion_barrier_alphas_1d,
         t,
     )
-
 
 if __name__ == "__main__":
     target_masses = np.asarray(
