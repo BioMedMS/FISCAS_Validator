@@ -256,7 +256,7 @@ def estimate_mu_from_distribution(
         barrier_alpha_est = float(np.clip(background_drop / max(edge_drop, eps), 0.0, 1.0))
 
     return {
-        "mu_est": float(mu_est),
+        "mu_est": float(mu_est * scaling_factor),
         "sigma_px_est": float(sigma_px_est),
         "sigma_ms_est": float(sigma_ms_est),
         "barrier_alpha_est": float(barrier_alpha_est),
