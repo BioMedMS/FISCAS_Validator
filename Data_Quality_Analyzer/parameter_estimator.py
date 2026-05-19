@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.gridspec import GridSpec
 import skimage.measure
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,13 +22,13 @@ def crop_canvas_and_msi(mask, msi, top, bottom, left, right):
     scaling_factor = int(mask.shape[0] / msi.shape[0])
 
     new_mask = mask[
-        left * scaling_factor:mask.shape[0] - right * scaling_factor,
-        top * scaling_factor:mask.shape[1] - bottom * scaling_factor,
+        top * scaling_factor:mask.shape[0] - bottom * scaling_factor,
+        left * scaling_factor:mask.shape[1] - right * scaling_factor,
     ]
 
     new_msi = msi[
-        left:msi.shape[0] - right,
-        top:msi.shape[1] - bottom,
+        top:msi.shape[0] - bottom,
+        left:msi.shape[1] - right,
         :,
     ]
 
@@ -168,21 +167,22 @@ def build_initial_sigmas_and_intensities(
 
     return sigmas, intensities
 
-def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor, target=None):
+def prepare_cell_render_geometry(cell_mask, cell_id, scaling_factor, target=None):
     sf = int(scaling_factor)
+    local_mask = cell_mask == cell_id
+    coords = np.argwhere(local_mask)
 
-    coords = np.argwhere(cell_mask == cell_id)
+    if target is None:
+        h_ms = int(np.ceil(cell_mask.shape[0] / sf))
+        w_ms = int(np.ceil(cell_mask.shape[1] / sf))
+    else:
+        h_ms, w_ms = target.shape[:2]
 
-    h_ms = int(np.ceil(cell_mask.shape[0] / sf))
-    w_ms = int(np.ceil(cell_mask.shape[1] / sf))
-
-    if coords.shape[0] == 0 or intensity <= 0:
-        return np.zeros((h_ms, w_ms), dtype=np.float32)
-
-    sigma = max(float(sigma), 1e-6)
+    if coords.shape[0] == 0:
+        return cell_mask.shape, coords, None, h_ms, w_ms, sf
 
     center = _choose_cell_center_from_mask_and_target(
-        local_mask=(cell_mask == cell_id),
+        local_mask=local_mask,
         target_patch=target,
         scaling_factor=scaling_factor,
     )
@@ -194,12 +194,20 @@ def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor,
 
     yy = coords[:, 0].astype(np.float32)
     xx = coords[:, 1].astype(np.float32)
-
     distance = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
 
+    return cell_mask.shape, coords, distance, h_ms, w_ms, sf
+
+def render_prepared_cell_to_msi(geometry, sigma, intensity):
+    cell_shape, coords, distance, h_ms, w_ms, sf = geometry
+
+    if coords.shape[0] == 0 or intensity <= 0:
+        return np.zeros((h_ms, w_ms), dtype=np.float32)
+
+    sigma = max(float(sigma), 1e-6)
     values = np.exp(-((distance / sigma) ** 2)) + 0.1
 
-    hr = np.zeros(cell_mask.shape, dtype=np.float32)
+    hr = np.zeros(cell_shape, dtype=np.float32)
     hr[coords[:, 0], coords[:, 1]] = values.astype(np.float32)
 
     total = float(hr.sum())
@@ -213,13 +221,25 @@ def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor,
     padded = np.zeros((pad_h, pad_w), dtype=np.float32)
     padded[:hr.shape[0], :hr.shape[1]] = hr
 
-    ms = skimage.measure.block_reduce(
+    return skimage.measure.block_reduce(
         padded,
         block_size=(sf, sf),
         func=np.sum,
-    ).astype(np.float32)
+    ).astype(np.float32)[:h_ms, :w_ms]
 
-    return ms
+def render_one_cell_to_msi(cell_mask, cell_id, sigma, intensity, scaling_factor, target=None):
+    geometry = prepare_cell_render_geometry(
+        cell_mask=cell_mask,
+        cell_id=cell_id,
+        scaling_factor=scaling_factor,
+        target=target,
+    )
+
+    return render_prepared_cell_to_msi(
+        geometry=geometry,
+        sigma=sigma,
+        intensity=intensity,
+    )
 
 def crop_same_shape(a, b):
     h = min(a.shape[0], b.shape[0])
@@ -255,8 +275,13 @@ def optimize_single_sigma(
     if target_cell_id not in valid_local_cell_ids:
         return float(sigmas[c][i])
 
+    local_pos = {
+        cell_id: idx
+        for idx, cell_id in enumerate(valid_local_cell_ids)
+    }
+
     target = cell_targets[c][i].astype(np.float32, copy=False)
-    target_local_idx = valid_local_cell_ids.index(target_cell_id)
+    target_local_idx = local_pos[target_cell_id]
 
     local_sigmas = [
         float(sigmas[c][global_pos[cell_id]])
@@ -268,57 +293,50 @@ def optimize_single_sigma(
         for cell_id in valid_local_cell_ids
     ]
 
-    rendered_cells = []
-
-    for local_idx, cell_id in enumerate(valid_local_cell_ids):
-        rendered = render_one_cell_to_msi(
+    geometries = [
+        prepare_cell_render_geometry(
             cell_mask=cell_masks[i],
             cell_id=cell_id,
-            sigma=local_sigmas[local_idx],
-            intensity=local_intensities[local_idx],
             scaling_factor=scaling_factor,
             target=target,
         )
+        for cell_id in valid_local_cell_ids
+    ]
 
-        rendered_cells.append(rendered)
+    rendered_cells = [
+        render_prepared_cell_to_msi(
+            geometry=geometries[local_idx],
+            sigma=local_sigmas[local_idx],
+            intensity=local_intensities[local_idx],
+        )
+        for local_idx in range(len(valid_local_cell_ids))
+    ]
 
-    baseline = np.zeros_like(rendered_cells[0], dtype=np.float32)
+    baseline = np.zeros_like(target, dtype=np.float32)
 
     for rendered in rendered_cells:
-        baseline[:rendered.shape[0], :rendered.shape[1]] += rendered
+        baseline += rendered
 
     target_old = rendered_cells[target_local_idx]
-
-    baseline_cmp, target_cmp = crop_same_shape(baseline, target)
-    best_score = symmetric_l1_ratio(target_cmp, baseline_cmp)
+    best_score = symmetric_l1_ratio(target, baseline)
     best_sigma = float(local_sigmas[target_local_idx])
+
+    baseline_without_target = baseline - target_old
 
     step = max(1, int(round(scaling_factor / 2)))
     max_sigma = max(1, int(round(sigmas[c][i])))
+    target_geometry = geometries[target_local_idx]
+    target_intensity = local_intensities[target_local_idx]
 
     for sigma in range(1, max_sigma + 1, step):
-        target_new = render_one_cell_to_msi(
-            cell_mask=cell_masks[i],
-            cell_id=target_cell_id,
+        target_new = render_prepared_cell_to_msi(
+            geometry=target_geometry,
             sigma=float(sigma),
-            intensity=local_intensities[target_local_idx],
-            scaling_factor=scaling_factor,
-            target=target,
+            intensity=target_intensity,
         )
 
-        generated = baseline.copy()
-
-        h_old = min(generated.shape[0], target_old.shape[0])
-        w_old = min(generated.shape[1], target_old.shape[1])
-        generated[:h_old, :w_old] -= target_old[:h_old, :w_old]
-
-        h_new = min(generated.shape[0], target_new.shape[0])
-        w_new = min(generated.shape[1], target_new.shape[1])
-        generated[:h_new, :w_new] += target_new[:h_new, :w_new]
-
-        generated_cmp, target_cmp = crop_same_shape(generated, target)
-
-        score = symmetric_l1_ratio(target_cmp, generated_cmp)
+        generated = baseline_without_target + target_new
+        score = symmetric_l1_ratio(target, generated)
 
         if score < best_score:
             best_score = score
@@ -377,11 +395,77 @@ def parallel_sigma_optimisation(
 
     return optimized_sigmas
 
+def build_cell_fraction_maps(mask, cell_indexes, scaling_factor, target_shape):
+    return {
+        int(cell_id): block_fraction_from_hr_mask(
+            mask_i=(mask == int(cell_id)),
+            scaling_factor=scaling_factor,
+            target_shape=target_shape,
+        ).astype(np.float32)
+        for cell_id in cell_indexes
+    }
+
+def adjust_intensity_parameters_after_diffusion(
+    generated_mu,
+    generated_optimized,
+    intensities,
+    cell_indexes,
+    cell_fraction_maps,
+    eps=1e-12,
+):
+    post = np.asarray(generated_mu, dtype=np.float32)
+    pre = np.asarray(generated_optimized, dtype=np.float32)
+
+    if post.shape != pre.shape:
+        raise ValueError(
+            f"generated_mu and generated_optimized must have the same shape. "
+            f"Got {post.shape} and {pre.shape}."
+        )
+
+    if post.ndim != 3:
+        raise ValueError(
+            f"generated_mu must have shape (H, W, C). Got {post.shape}."
+        )
+
+    adjusted_intensities = [
+        [float(x) for x in channel_intensities]
+        for channel_intensities in intensities
+    ]
+
+    num_channels = post.shape[-1]
+
+    for i, cell_id in enumerate(cell_indexes):
+        cell_fraction = cell_fraction_maps.get(int(cell_id))
+
+        if cell_fraction is None:
+            continue
+
+        cell_pixels = cell_fraction > 0
+
+        if not np.any(cell_pixels):
+            continue
+
+        weights = cell_fraction[cell_pixels]
+
+        for c in range(num_channels):
+            pre_sum = float(np.sum(pre[:, :, c][cell_pixels] * weights))
+            post_sum = float(np.sum(post[:, :, c][cell_pixels] * weights))
+
+            if pre_sum <= eps:
+                adjusted_intensities[c][i] = 0.0
+                continue
+
+            if post_sum <= eps:
+                continue
+
+            adjusted_intensities[c][i] *= pre_sum / post_sum
+
+    return adjusted_intensities
+
 def _value_for_channel(values, c):
     if np.isscalar(values):
         return float(values)
 
-    values = list(values)
     return float(values[c])
 
 def make_channel_generator(
@@ -442,7 +526,6 @@ def _channel_suffix(channel_index, channel_labels=None):
     return str(label)
 
 def relabel_mask_for_display(mask):
-    """Relabel arbitrary cell IDs to consecutive integers for display."""
     mask = np.asarray(mask)
     cell_ids = np.unique(mask)
     cell_ids = cell_ids[cell_ids > 0]
@@ -455,7 +538,6 @@ def relabel_mask_for_display(mask):
     return relabeled
 
 def compute_channel_l1_errors(msi, generated, channels_to_show, channel_labels=None):
-    """Compute per-channel symmetric L1 errors without plotting intermediates."""
     l1_errors = {}
 
     for ch in channels_to_show:
@@ -474,16 +556,6 @@ def plot_channel_pipeline_summary(
     title="MSI generation pipeline",
     channel_number=None,
 ):
-    """
-    Render one final summary figure for one channel.
-
-    Layout:
-        [Mask | Initial | Sigma-opt | Mu-diffusion | Final | Sim-noise | Target | Colorbar]
-
-    The panel widths are derived from the true image aspect ratios, so the figure
-    always fits the rendered content. Extra space is reserved on the far right so
-    colorbar tick labels up to 5 digits do not get cut off.
-    """
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
     if channel_number is None:
@@ -518,7 +590,6 @@ def plot_channel_pipeline_summary(
     if vmax <= vmin:
         vmax = vmin + 1e-6
 
-    # Layout parameters
     left_margin = 0.20
     right_margin = 0.06
     bottom_margin = 0.18
@@ -531,10 +602,8 @@ def plot_channel_pipeline_summary(
     cbar_gap = 0.06
     cbar_width = 0.12
 
-    # Extra space so cbar tick labels like 12345 are not clipped
     cbar_tick_label_space = 0.50
 
-    # Common rendered image height; widths are derived from true aspect ratios
     panel_height = 3.00
 
     panel_widths = []
@@ -639,7 +708,6 @@ def plot_final_channel_summaries(
     base_filename="pipeline_summary",
     title="MSI generation pipeline",
 ):
-    """Create exactly one final render per requested channel."""
     os.makedirs(output_dir, exist_ok=True)
 
     output_paths = []
@@ -970,17 +1038,6 @@ def estimate_parameters(
     apply_final_noise=True,
     noise_rank_match=True,
     save_parameter_summary_csv=True):
-    """
-    Estimate MSI generation parameters.
-
-    Returns:
-        intensities_2d
-        sigmas_2d
-        diffusion_coefficients_1d
-        diffusion_dt_1d
-        diffusion_barrier_alphas_1d
-        t
-    """
     print("Preparing input arrays")
 
     mask = np.asarray(mask, dtype=np.int32)
@@ -1076,31 +1133,37 @@ def estimate_parameters(
         num_channels=num_channels,
     )
 
-    zero_diffusion_total_times = [0.0] * num_channels
-    zero_diffusion_coefficients = [0.0] * num_channels
-    zero_diffusion_barrier_alphas = [diffusion_barrier_alpha] * num_channels
-
-    print("Generating initial no-diffusion simulation before sigma optimization")
-    preopt_generator = make_channel_generator(
+    print("Building cell fraction maps")
+    cell_fraction_maps = build_cell_fraction_maps(
         mask=mask,
-        sigmas=sigmas,
-        intensities=intensities,
-        diffusion_total_times=zero_diffusion_total_times,
-        diffusion_coefficients=zero_diffusion_coefficients,
-        diffusion_barrier_alphas=zero_diffusion_barrier_alphas,
+        cell_indexes=cell_indexes,
         scaling_factor=scaling_factor,
-        diffusion_downsample=diffusion_downsample,
-        max_sigma_lowres=max_sigma_lowres,
-        target_msi=msi,
+        target_shape=msi.shape[:2],
     )
 
-    generated_preopt = generate_all_channels(
-        num_channels=num_channels,
-        channel_generator=preopt_generator,
-        max_workers=generation_max_workers,
-    )
+    generated_preopt = None
 
     if plotting_enabled:
+        print("Generating initial no-diffusion simulation before sigma optimization")
+        preopt_generator = make_channel_generator(
+            mask=mask,
+            sigmas=sigmas,
+            intensities=intensities,
+            diffusion_total_times=0.0,
+            diffusion_coefficients=0.0,
+            diffusion_barrier_alphas=diffusion_barrier_alpha,
+            scaling_factor=scaling_factor,
+            diffusion_downsample=diffusion_downsample,
+            max_sigma_lowres=max_sigma_lowres,
+            target_msi=msi,
+        )
+
+        generated_preopt = generate_all_channels(
+            num_channels=num_channels,
+            channel_generator=preopt_generator,
+            max_workers=generation_max_workers,
+        )
+
         print("Computing initial no-optimization errors")
         l1_errors_by_step["initial_no_optimization"] = compute_channel_l1_errors(
             msi=msi,
@@ -1125,9 +1188,9 @@ def estimate_parameters(
         mask=mask,
         sigmas=sigmas,
         intensities=intensities,
-        diffusion_total_times=zero_diffusion_total_times,
-        diffusion_coefficients=zero_diffusion_coefficients,
-        diffusion_barrier_alphas=zero_diffusion_barrier_alphas,
+        diffusion_total_times=0.0,
+        diffusion_coefficients=0.0,
+        diffusion_barrier_alphas=diffusion_barrier_alpha,
         scaling_factor=scaling_factor,
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
@@ -1166,7 +1229,7 @@ def estimate_parameters(
 
     print("Preparing diffusion parameters")
     t = float(diffusion_total_time)
-    diffusion_dt_1d = np.full(num_channels, t, dtype=np.float64)
+    diffusion_total_times_1d = np.full(num_channels, t, dtype=np.float64)
 
     diffusion_coefficients_1d = np.asarray(
         [float(mu_c.get("mu_est", 0.0)) for mu_c in mus],
@@ -1185,7 +1248,36 @@ def estimate_parameters(
         mask=mask,
         sigmas=sigmas,
         intensities=intensities,
-        diffusion_total_times=diffusion_dt_1d.tolist(),
+        diffusion_total_times=diffusion_total_times_1d,
+        diffusion_coefficients=diffusion_coefficients_1d.tolist(),
+        diffusion_barrier_alphas=diffusion_barrier_alphas_1d.tolist(),
+        scaling_factor=scaling_factor,
+        diffusion_downsample=diffusion_downsample,
+        max_sigma_lowres=max_sigma_lowres,
+        target_msi=msi,
+    )
+
+    generated_mu_uncorrected = generate_all_channels(
+        num_channels=num_channels,
+        channel_generator=mu_generator,
+        max_workers=generation_max_workers,
+    )
+
+    print("Adjusting intensity parameters after diffusion")
+    intensities = adjust_intensity_parameters_after_diffusion(
+        generated_mu=generated_mu_uncorrected,
+        generated_optimized=generated_optimized,
+        intensities=intensities,
+        cell_indexes=cell_indexes,
+        cell_fraction_maps=cell_fraction_maps,
+    )
+
+    print("Generating barrier-aware mu-based diffusion simulation with adjusted intensities")
+    mu_generator = make_channel_generator(
+        mask=mask,
+        sigmas=sigmas,
+        intensities=intensities,
+        diffusion_total_times=diffusion_total_times_1d,
         diffusion_coefficients=diffusion_coefficients_1d.tolist(),
         diffusion_barrier_alphas=diffusion_barrier_alphas_1d.tolist(),
         scaling_factor=scaling_factor,
@@ -1200,6 +1292,19 @@ def estimate_parameters(
         max_workers=generation_max_workers,
     )
 
+    if apply_final_noise:
+        print("Applying final noise model")
+        generated_final = apply_noise_model(
+            generated_mu,
+            msi,
+            seed=noise_seed,
+            rank_match=noise_rank_match,
+        )
+    else:
+        generated_final = generated_mu
+
+    generated_sim_noise = generated_mu
+
     if plotting_enabled:
         print("Computing barrier-aware mu-based diffusion errors")
         l1_errors_by_step["mu_diffusion"] = compute_channel_l1_errors(
@@ -1210,14 +1315,6 @@ def estimate_parameters(
         )
 
         if apply_final_noise:
-            print("Applying final noise model")
-            generated_final = apply_noise_model(
-                generated_mu,
-                msi,
-                seed=noise_seed,
-                rank_match=noise_rank_match,
-            )
-
             print("Applying simulation-style random Gaussian noise")
             generated_sim_noise = apply_noise_model(
                 generated_mu,
@@ -1226,25 +1323,21 @@ def estimate_parameters(
                 rank_match=False,
             )
 
-            if plotting_enabled:
-                print("Computing final noise errors")
-                l1_errors_by_step["mu_diffusion_noise"] = compute_channel_l1_errors(
-                    msi=msi,
-                    generated=generated_final,
-                    channels_to_show=channels_to_show,
-                    channel_labels=channel_labels,
-                )
+            print("Computing final noise errors")
+            l1_errors_by_step["mu_diffusion_noise"] = compute_channel_l1_errors(
+                msi=msi,
+                generated=generated_final,
+                channels_to_show=channels_to_show,
+                channel_labels=channel_labels,
+            )
 
-                print("Computing simulation-style random noise errors")
-                l1_errors_by_step["mu_diffusion_sim_noise"] = compute_channel_l1_errors(
-                    msi=msi,
-                    generated=generated_sim_noise,
-                    channels_to_show=channels_to_show,
-                    channel_labels=channel_labels,
-                )
-        else:
-            generated_final = generated_mu
-            generated_sim_noise = generated_mu
+            print("Computing simulation-style random noise errors")
+            l1_errors_by_step["mu_diffusion_sim_noise"] = compute_channel_l1_errors(
+                msi=msi,
+                generated=generated_sim_noise,
+                channels_to_show=channels_to_show,
+                channel_labels=channel_labels,
+            )
 
     if plotting_enabled:
         print("Rendering final per-channel pipeline summaries")
@@ -1257,11 +1350,6 @@ def estimate_parameters(
             "Final": generated_final,
             "Sim-noise": generated_sim_noise,
         }
-
-        if apply_final_noise:
-            step_images["Final"] = generated_final
-        else:
-            step_images["Final"] = generated_mu
 
         plot_final_channel_summaries(
             mask=mask,
@@ -1292,7 +1380,7 @@ def estimate_parameters(
             channel_labels=channel_labels,
             channels=channels,
             diffusion_coefficients=diffusion_coefficients_1d,
-            diffusion_dt=diffusion_dt_1d,
+            diffusion_dt=diffusion_total_times_1d,
             diffusion_barrier_alphas=diffusion_barrier_alphas_1d,
             t=t,
             mus=mus,
@@ -1309,7 +1397,7 @@ def estimate_parameters(
         intensities_2d,
         sigmas_2d,
         diffusion_coefficients_1d,
-        diffusion_dt_1d,
+        diffusion_total_times_1d,
         diffusion_barrier_alphas_1d,
         t,
     )
@@ -1325,8 +1413,8 @@ if __name__ == "__main__":
         dtype=np.float64,
     )
 
-    mask = np.load("input/seg.npy").astype(np.int32)
-    msi = np.load("input/msi_data.npy").astype(np.float32)
+    mask = np.load("input/seg.npy")
+    msi = np.load("input/msi_data.npy")
 
     all_masses = np.load("input/mass_list.npy").astype(np.float64).ravel()
 
