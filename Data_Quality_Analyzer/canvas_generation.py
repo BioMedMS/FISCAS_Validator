@@ -1,3 +1,6 @@
+import contextlib
+import io
+
 import numpy as np
 import matplotlib.pyplot as plt
 import skimage
@@ -374,6 +377,9 @@ def generate_msi_from_existing_mask(
     diffusion_downsample=8,
     max_sigma_lowres=10.0,
     target_canvas=None,
+    local_diffusion=True,
+    diffusion_crop_n_sigma=4.0,
+    local_diffusion_verbose=False,
 ):
     if mask_canvas.ndim != 2:
         raise ValueError("mask_canvas must be a 2D labeled mask")
@@ -538,6 +544,297 @@ def generate_msi_from_existing_mask(
     )
 
 
+
+def estimate_diffusion_effect_radius_px(
+    diffusion_coeff,
+    total_time,
+    mic_spacing=1.0,
+    diffusion_downsample=8,
+    max_sigma_lowres=10.0,
+    n_sigma=4.0,
+):
+    """
+    Estimate the high-resolution crop radius needed to capture the visible
+    Gaussian diffusion effect for local diffusion.
+
+    The full diffusion path computes sigma_full_px = sqrt(2 * D * T) / mic_spacing,
+    then optionally caps sigma on the temporary low-resolution grid. This helper
+    mirrors that cap and converts the usable sigma back to high-resolution pixels.
+    """
+    if total_time <= 0 or diffusion_coeff <= 0:
+        return 0
+
+    if mic_spacing <= 0:
+        raise ValueError("mic_spacing must be positive.")
+
+    downsample = int(max(1, diffusion_downsample))
+    sigma_full_px = np.sqrt(2.0 * float(diffusion_coeff) * float(total_time)) / float(mic_spacing)
+
+    if max_sigma_lowres is not None:
+        sigma_full_px = min(sigma_full_px, float(max_sigma_lowres) * float(downsample))
+
+    # Add a small numerical guard for low-res filtering / upsampling support.
+    return int(np.ceil(float(n_sigma) * sigma_full_px + 2 * downsample))
+
+
+def _aligned_crop_box_from_bbox(
+    y0,
+    y1,
+    x0,
+    x1,
+    image_shape,
+    margin,
+    alignment,
+):
+    """
+    Build a crop around a high-resolution cell bbox, aligned to MSI block
+    boundaries so reduced local crops stitch back exactly into MSI coordinates.
+    """
+    H, W = image_shape
+    alignment = int(max(1, alignment))
+    margin = int(max(0, margin))
+
+    top = max(0, int(y0) - margin)
+    left = max(0, int(x0) - margin)
+    bottom = min(H, int(y1) + margin)
+    right = min(W, int(x1) + margin)
+
+    top = (top // alignment) * alignment
+    left = (left // alignment) * alignment
+    bottom = int(np.ceil(bottom / alignment) * alignment)
+    right = int(np.ceil(right / alignment) * alignment)
+
+    bottom = min(H, max(bottom, top + alignment))
+    right = min(W, max(right, left + alignment))
+
+    return top, bottom, left, right
+
+
+def _render_one_cell_source_patch(
+    mask_patch,
+    cell_id,
+    sigma,
+    intensity,
+    mic_spacing=1.0,
+    target_patch=None,
+    scaling_factor=None,
+):
+    """
+    Render one cell's pre-diffusion source field inside a local crop.
+    The returned patch has the same shape as mask_patch and contains only this
+    cell's contribution.
+    """
+    local_mask = mask_patch == int(cell_id)
+    coords = np.argwhere(local_mask)
+    source = np.zeros(mask_patch.shape, dtype=np.float32)
+
+    if coords.shape[0] == 0 or float(intensity) <= 0:
+        return source
+
+    center = _choose_cell_center_from_mask_and_target(
+        local_mask=local_mask,
+        target_patch=target_patch,
+        scaling_factor=scaling_factor,
+    )
+
+    if center is None:
+        cy, cx = coords.mean(axis=0)
+    else:
+        cy, cx = center
+
+    yy = coords[:, 0].astype(np.float32)
+    xx = coords[:, 1].astype(np.float32)
+
+    distance = np.sqrt((yy - cy) ** 2 + (xx - cx) ** 2) * float(mic_spacing)
+    sigma = max(float(sigma), 1e-6)
+    values = np.exp(-((distance / sigma) ** 2)) + 0.1
+    source[coords[:, 0], coords[:, 1]] = values.astype(np.float32)
+
+    total = float(source.sum())
+    if total > 0:
+        source *= float(intensity) / total
+
+    return source.astype(np.float32, copy=False)
+
+
+def _block_reduce_local_to_msi(diffused_patch, scaling_factor):
+    low, _ = _block_reduce_sum_exact(
+        np.asarray(diffused_patch, dtype=np.float32),
+        int(scaling_factor),
+    )
+    return low.astype(np.float32, copy=False)
+
+
+def generate_msi_from_mask_slice_local_diffusion(
+    mask_slice,
+    sigmas,
+    intensities,
+    diffusion_total_time,
+    diffusion_coefficient,
+    diffusion_barrier_alpha,
+    mic_spacing=1.0,
+    leaky_outer_boundary=False,
+    use_gpu=True,
+    ms_spacing=None,
+    diffusion_downsample=8,
+    max_sigma_lowres=10.0,
+    target_canvas=None,
+    diffusion_crop_n_sigma=4.0,
+    verbose=False,
+):
+    """
+    Generate an MSI canvas by diffusing each cell in a padded local crop and
+    stitching the reduced local MSI patches into the final image.
+
+    This avoids allocating and blurring a full high-resolution diffusion canvas.
+    It is intended to approximate the full-canvas path when the local crop radius
+    captures the practical Gaussian support. Increase diffusion_crop_n_sigma for
+    higher fidelity; 4.0 is usually a good speed/accuracy tradeoff.
+    """
+    if ms_spacing is None:
+        raise ValueError("local diffusion requires ms_spacing so local crops can be stitched into MSI space.")
+
+    mask_slice = np.asarray(mask_slice)
+    if mask_slice.ndim != 2:
+        raise ValueError("mask_slice must be a 2D labeled mask")
+
+    scaling_factor = int(ms_spacing / mic_spacing)
+    if scaling_factor < 1:
+        raise ValueError("ms_spacing must be >= mic_spacing")
+
+    cell_ids = np.unique(mask_slice)
+    cell_ids = cell_ids[cell_ids > 0]
+
+    if len(sigmas) != len(cell_ids):
+        raise ValueError(
+            f"Number of sigmas ({len(sigmas)}) must equal number of cells ({len(cell_ids)})"
+        )
+
+    if len(intensities) != len(cell_ids):
+        raise ValueError(
+            f"Number of intensities ({len(intensities)}) must equal number of cells ({len(cell_ids)})"
+        )
+
+    H, W = mask_slice.shape
+    out_h = int(np.ceil(H / scaling_factor))
+    out_w = int(np.ceil(W / scaling_factor))
+    ms_canvas = np.zeros((out_h, out_w), dtype=np.float32)
+
+    diffusion_margin = estimate_diffusion_effect_radius_px(
+        diffusion_coeff=diffusion_coefficient,
+        total_time=diffusion_total_time,
+        mic_spacing=mic_spacing,
+        diffusion_downsample=diffusion_downsample,
+        max_sigma_lowres=max_sigma_lowres,
+        n_sigma=diffusion_crop_n_sigma,
+    )
+
+    # Ensure the crop has at least one MSI-pixel collar, even for tiny mu values.
+    diffusion_margin = max(int(diffusion_margin), int(scaling_factor))
+
+    if verbose:
+        print(
+            "[local diffusion]",
+            "cells =", len(cell_ids),
+            "margin_px =", diffusion_margin,
+            "scaling_factor =", scaling_factor,
+        )
+
+    for idx, cell_id in enumerate(cell_ids):
+        sigma = float(sigmas[idx])
+        intensity = float(intensities[idx])
+
+        if intensity <= 0:
+            continue
+
+        ys, xs = np.where(mask_slice == int(cell_id))
+        if xs.size == 0:
+            continue
+
+        y0 = int(ys.min())
+        y1 = int(ys.max()) + 1
+        x0 = int(xs.min())
+        x1 = int(xs.max()) + 1
+
+        top, bottom, left, right = _aligned_crop_box_from_bbox(
+            y0=y0,
+            y1=y1,
+            x0=x0,
+            x1=x1,
+            image_shape=mask_slice.shape,
+            margin=diffusion_margin,
+            alignment=scaling_factor,
+        )
+
+        mask_patch = mask_slice[top:bottom, left:right]
+
+        local_target = None
+        if target_canvas is not None:
+            ty0 = top // scaling_factor
+            ty1 = int(np.ceil(bottom / scaling_factor))
+            tx0 = left // scaling_factor
+            tx1 = int(np.ceil(right / scaling_factor))
+            local_target = np.asarray(target_canvas[ty0:ty1, tx0:tx1], dtype=np.float32)
+
+        source_patch = _render_one_cell_source_patch(
+            mask_patch=mask_patch,
+            cell_id=int(cell_id),
+            sigma=sigma,
+            intensity=intensity,
+            mic_spacing=mic_spacing,
+            target_patch=local_target,
+            scaling_factor=scaling_factor,
+        )
+
+        if diffusion_total_time <= 0 or diffusion_coefficient <= 0:
+            diffused_patch = source_patch
+        else:
+            # Suppress per-cell debug prints from the full diffusion helper.
+            if verbose:
+                diffused_patch = diffuse_mask_2d(
+                    mask=mask_patch,
+                    u0=source_patch,
+                    total_time=diffusion_total_time,
+                    diffusion_coeff=diffusion_coefficient,
+                    barrier_alpha=diffusion_barrier_alpha,
+                    leaky_outer_boundary=True,
+                    use_gpu=use_gpu,
+                    mic_spacing=mic_spacing,
+                    downsample=diffusion_downsample,
+                    max_sigma_lowres=max_sigma_lowres,
+                )
+            else:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    diffused_patch = diffuse_mask_2d(
+                        mask=mask_patch,
+                        u0=source_patch,
+                        total_time=diffusion_total_time,
+                        diffusion_coeff=diffusion_coefficient,
+                        barrier_alpha=diffusion_barrier_alpha,
+                        leaky_outer_boundary=True,
+                        use_gpu=use_gpu,
+                        mic_spacing=mic_spacing,
+                        downsample=diffusion_downsample,
+                        max_sigma_lowres=max_sigma_lowres,
+                    )
+
+        local_ms = _block_reduce_local_to_msi(
+            diffused_patch=diffused_patch,
+            scaling_factor=scaling_factor,
+        )
+
+        top_ms = top // scaling_factor
+        left_ms = left // scaling_factor
+        bottom_ms = min(top_ms + local_ms.shape[0], ms_canvas.shape[0])
+        right_ms = min(left_ms + local_ms.shape[1], ms_canvas.shape[1])
+
+        h = bottom_ms - top_ms
+        w = right_ms - left_ms
+        if h > 0 and w > 0:
+            ms_canvas[top_ms:bottom_ms, left_ms:right_ms] += local_ms[:h, :w]
+
+    return ms_canvas.astype(np.float32, copy=False)
+
 def generate_msi_from_mask_slice(
     mask_slice,
     sigmas,
@@ -552,6 +849,9 @@ def generate_msi_from_mask_slice(
     diffusion_downsample=8,
     max_sigma_lowres=10.0,
     target_canvas=None,
+    local_diffusion=True,
+    diffusion_crop_n_sigma=4.0,
+    local_diffusion_verbose=False,
 ):
     if mask_slice.ndim != 2:
         raise ValueError("mask_slice must be a 2D labeled mask")
@@ -567,6 +867,30 @@ def generate_msi_from_mask_slice(
     if len(intensities) != len(cell_ids):
         raise ValueError(
             f"Number of intensities ({len(intensities)}) must equal number of cells ({len(cell_ids)})"
+        )
+
+    if (
+        local_diffusion
+        and ms_spacing is not None
+        and diffusion_total_time > 0
+        and diffusion_coefficient > 0
+    ):
+        return generate_msi_from_mask_slice_local_diffusion(
+            mask_slice=mask_slice,
+            sigmas=sigmas,
+            intensities=intensities,
+            diffusion_total_time=diffusion_total_time,
+            diffusion_coefficient=diffusion_coefficient,
+            diffusion_barrier_alpha=diffusion_barrier_alpha,
+            mic_spacing=mic_spacing,
+            leaky_outer_boundary=leaky_outer_boundary,
+            use_gpu=use_gpu,
+            ms_spacing=ms_spacing,
+            diffusion_downsample=diffusion_downsample,
+            max_sigma_lowres=max_sigma_lowres,
+            target_canvas=target_canvas,
+            diffusion_crop_n_sigma=diffusion_crop_n_sigma,
+            verbose=local_diffusion_verbose,
         )
 
     cell_canvas = np.zeros_like(mask_slice, dtype=np.float32)

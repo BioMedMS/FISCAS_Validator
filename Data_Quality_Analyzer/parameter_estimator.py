@@ -479,6 +479,9 @@ def make_channel_generator(
     diffusion_downsample=8,
     max_sigma_lowres=15.0,
     target_msi=None,
+    local_diffusion=True,
+    diffusion_crop_n_sigma=4.0,
+    local_diffusion_verbose=False,
 ):
     def _generate_channel(c):
         return generate_msi_from_mask_slice(
@@ -495,6 +498,9 @@ def make_channel_generator(
             diffusion_downsample=diffusion_downsample,
             max_sigma_lowres=max_sigma_lowres,
             target_canvas=(target_msi[:, :, c] if target_msi is not None else None),
+            local_diffusion=local_diffusion,
+            diffusion_crop_n_sigma=diffusion_crop_n_sigma,
+            local_diffusion_verbose=local_diffusion_verbose,
         )
 
     return _generate_channel
@@ -1027,6 +1033,9 @@ def estimate_parameters(
     diffusion_total_time=1.0,
     diffusion_downsample=8,
     max_sigma_lowres=15.0,
+    local_diffusion=True,
+    diffusion_crop_n_sigma=4.0,
+    local_diffusion_verbose=False,
     diffusion_estimation_power=2.0,
     diffusion_cell_fraction_threshold=0.5,
     diffusion_background_fraction_threshold=0.05,
@@ -1195,6 +1204,9 @@ def estimate_parameters(
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
         target_msi=msi,
+        local_diffusion=local_diffusion,
+        diffusion_crop_n_sigma=diffusion_crop_n_sigma,
+        local_diffusion_verbose=local_diffusion_verbose,
     )
 
     generated_optimized = generate_all_channels(
@@ -1255,6 +1267,9 @@ def estimate_parameters(
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
         target_msi=msi,
+        local_diffusion=local_diffusion,
+        diffusion_crop_n_sigma=diffusion_crop_n_sigma,
+        local_diffusion_verbose=local_diffusion_verbose,
     )
 
     generated_mu_uncorrected = generate_all_channels(
@@ -1284,6 +1299,9 @@ def estimate_parameters(
         diffusion_downsample=diffusion_downsample,
         max_sigma_lowres=max_sigma_lowres,
         target_msi=msi,
+        local_diffusion=local_diffusion,
+        diffusion_crop_n_sigma=diffusion_crop_n_sigma,
+        local_diffusion_verbose=local_diffusion_verbose,
     )
 
     generated_mu = generate_all_channels(
@@ -1446,10 +1464,10 @@ if __name__ == "__main__":
         msi=msi,
         channels=channels,
         masses=masses,
-        crop_top=110,
-        crop_bottom=110,
-        crop_left=100,
-        crop_right=100,
+        crop_top=0,
+        crop_bottom=0,
+        crop_left=0,
+        crop_right=0,
         flatten_top_percent=True,
         plotting_enabled=True,
         output_dir="output",
