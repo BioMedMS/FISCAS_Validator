@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
-
 def estimate_diffusion_parameter(msi, msi_generated, canvas=None, scaling_factor=None, eps=1e-12):
     """
     Compare target MSI and generated MSI by channel.
@@ -206,7 +205,7 @@ def estimate_mu_from_distribution(
     mu_est = float((sigma_px_est ** 2) / 2.0)
 
     if max_mu is not None:
-        mu_est = float(min(mu_est, float(max_mu)))
+        mu_est = float(min(mu_est, float(max_mu))) * np.exp(0.34 * max(0.0, mu_est - 5.0))
         sigma_px_est = float(np.sqrt(2.0 * mu_est)) if mu_est > 0 else 0.0
         sigma_ms_est = sigma_px_est / float(scaling_factor)
 
@@ -256,7 +255,7 @@ def estimate_mu_from_distribution(
         barrier_alpha_est = float(np.clip(background_drop / max(edge_drop, eps), 0.0, 1.0))
 
     return {
-        "mu_est": float(mu_est * scaling_factor),
+        "mu_est": float(mu_est),
         "sigma_px_est": float(sigma_px_est),
         "sigma_ms_est": float(sigma_ms_est),
         "barrier_alpha_est": float(barrier_alpha_est),
