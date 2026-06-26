@@ -10,6 +10,7 @@
 *.pyc
 __pycache__/
 *.pkl
+<<<<<<< HEAD
 *.xlsx
 *.csv
 *.jpg
@@ -22,6 +23,19 @@ __pycache__/
 *.tif
 *.tiff
 *.icache
+=======
+*.csv
+*.imzML
+*.ibd
+*.jpg
+*.png
+*.tif
+*.tiff
+*.icache
+*.slx
+*.sbd
+*.npy
+>>>>>>> 22-improve-intracellular-signal-distribution
 
 **/*.quarto_ipynb
 render_animation.py
