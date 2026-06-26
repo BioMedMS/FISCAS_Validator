@@ -399,8 +399,8 @@ def generate_and_plot_canvases(validator):
 
         for j in range(max_panels, len(axes_flat)):
             axes_flat[j].axis("off")
-        #if validator.plot:
-        #    plt.show()
+        if validator.plot:
+            plt.show()
         # --- Save if requested ---
         if validator.save_img:
             fig_mic.savefig(

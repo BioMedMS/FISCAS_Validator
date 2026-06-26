@@ -30,7 +30,6 @@ noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg"
 
 # Validator parameters
 output="./output/"
-allow_multiplets=True
 use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
@@ -57,7 +56,6 @@ diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
 diffusion_leaky_outer_boundary=True
 
 params_best_case = {
-    "allow_multiplets": True,
     "diffusion_total_time": 0,
     "remove_ambiguous": False,
     "rotation": 0,
@@ -69,7 +67,6 @@ params_best_case = {
 }
 
 params_real_case = {
-    "allow_multiplets": True,
     "diffusion_total_time": 100,
     "remove_ambiguous": False,
     "rotation": 0.2,
@@ -81,7 +78,6 @@ params_real_case = {
 }
 
 params_worst_case = {
-    "allow_multiplets": True,
     "diffusion_total_time": 300,
     "remove_ambiguous": False,
     "rotation": 5,
@@ -92,7 +88,7 @@ params_worst_case = {
     "texture_epsilon": 0.5,
 }
 
-allow_multiplets, diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon = params_best_case.values()
+diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon = params_best_case.values()
 
 
 validator_instances = []
@@ -145,7 +141,6 @@ for j in seeds:
         output=run_dir,
         use_perfect_segmentation=use_perfect_segmentation, 
         use_perfect_registration=use_perfect_registration, 
-        allow_multiplets=allow_multiplets,
         remove_ambiguous=remove_ambiguous,
         seed=seed, 
         scale=scale, 
