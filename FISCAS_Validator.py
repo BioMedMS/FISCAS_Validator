@@ -216,9 +216,8 @@ class Validator:
         cell_image = skimage.io.imread(images[cell_chosen])
         cell_rotated = skimage.transform.rotate(cell_image, angle, resize=True)
         mask_rotated = skimage.transform.rotate(np.array(cell_mask), angle, order=0, resize=True)
-        cell_scaled = skimage.transform.rescale(cell_rotated, scaling_factor, anti_aliasing=True)
+        cell_scaled = skimage.transform.rescale(cell_rotated, scaling_factor, anti_aliasing=True, channel_axis=-1)
         mask_scaled = skimage.transform.rescale(mask_rotated, scaling_factor, order=0, anti_aliasing=False)
-        cell_scaled[mask_scaled == 0] = 0
         return cell_scaled, mask_scaled.astype(np.uint16), current_mask_index
 
 

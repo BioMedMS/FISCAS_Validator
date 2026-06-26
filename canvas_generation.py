@@ -116,6 +116,7 @@ def generate_and_plot_canvases(validator):
             mask_index=current_id
         )
 
+
         # prevent cell images to violate canvas border
         p_top_left = (
             int(p[0] - cell.shape[1] // 2),
