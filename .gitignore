@@ -26,3 +26,4 @@ __pycache__/
 **/*.quarto_ipynb
 render_animation.py
 FISCAS_Validator.code-workspace
+

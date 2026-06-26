@@ -1053,7 +1053,7 @@ if __name__== "__main__":
         diffusion_coeff=[0.1,1,50,10],
         diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
         diffusion_leaky_outer_boundary=True,
-        texture='all',
+        texture='registration',
         texture_path="./textures/noise_gradient_150x150.jpg",
         texture_epsilon_add=0.13,
         texture_epsilon_multiply=0.3,)
