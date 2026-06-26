@@ -25,7 +25,7 @@ from sklearn.decomposition import PCA
 from canvas_generation import generate_and_plot_canvases
 import uuid
 
-matplotlib.use('Agg')
+#matplotlib.use('Agg')
 
 SMALL_SIZE = 10
 MEDIUM_SIZE = 12
@@ -45,7 +45,6 @@ class Validator:
     def __init__(self,
         cell_types, # define cell populations with CellType objects,
         output="./output",
-        allow_multiplets=True, # allow placement of cell clusters
         use_perfect_registration=False, # skip registration by using the inverse of perturbation transform
         use_perfect_segmentation=True, # skip segmentation by using the ground truth masks
         teaching_imprecision=10,  # accuracy of landmark registration in µm
@@ -74,7 +73,6 @@ class Validator:
 
         self.cell_types = cell_types
         self.output = output
-        self.allow_multiplets = allow_multiplets
         self.use_perfect_registration = use_perfect_registration
         self.use_perfect_segmentation = use_perfect_segmentation
         self.teaching_imprecision = teaching_imprecision
@@ -152,7 +150,6 @@ class Validator:
             "ID": uuid.uuid4(),
             "cell_types": cell_types,
             "output": self.output,
-            "allow_multiplets": self.allow_multiplets,
             "use_perfect_registration": self.use_perfect_registration,
             "use_perfect_segmentation": self.use_perfect_segmentation,
             "teaching_imprecision": self.teaching_imprecision,
@@ -186,40 +183,32 @@ class Validator:
     def load_random_cell(self, cell_directory, mask_index=255, seed=None):
         all_images = glob.glob(os.path.join(cell_directory, '**', '*.*'), recursive=True)
         images = sorted([
-            file for file in all_images if 'cell' in os.path.basename(file) and 'mask' not in os.path.basename(file)])
+            file for file in all_images if 'cell' in os.path.basename(file) and 'seg' not in os.path.basename(file)])
         masks = sorted([
-            file for file in all_images if 'mask' in os.path.basename(file)])
+            file for file in all_images if 'seg' in os.path.basename(file)])
         if seed is None:
             angle = random.randint(0, 360)
             scaling_factor = random.uniform(0.8, 1.2)
-            while True:
-                cell_chosen = random.randint(0, len(images)-1)
-                #check if there is more than one cell on the chosen image
-                is_multiplet = "doublet" in masks[cell_chosen] or "triplet" in masks[cell_chosen] or "multiplet" in masks[cell_chosen]
-                if is_multiplet and not self.allow_multiplets:
-                    continue  # Retry if the cell is a multiplet and multiplets are not allowed
-                else:
-                    break
+            cell_chosen = random.randint(0, len(images)-1)
         else:
             angle = 0
             scaling_factor = 1
             cell_chosen = seed
         cell_mask = np.array(Image.open(masks[cell_chosen]), dtype=np.uint16) # open corresponding cell mask
-        if is_multiplet: # if cell image contains multiple cells, reindex mask ids to match the current running number already placed on canvas
-            mask_ids = np.unique(cell_mask)
-            for mask_id in mask_ids:
-                if mask_id != 0:
-                    cell_mask[cell_mask == mask_id] = mask_index
-                    mask_index += 1
-            mask_index -= 1
-        else:
-            cell_mask[cell_mask > 0] = mask_index
+        mask_ids = np.unique(cell_mask)
+        for mask_id in mask_ids:
+            if mask_id != 0:
+                cell_mask[cell_mask == mask_id] = mask_index
+                mask_index += 1
+        mask_index -= 1
         current_mask_index = mask_index
-        with Image.open(images[cell_chosen]) as img: 
-            cell_image = np.zeros((img.size[1], img.size[0], img.n_frames))
-            for i in range(img.n_frames):
-                img.seek(i)
-                cell_image[:, :, i] = skimage.exposure.equalize_adapthist(np.array(img))
+        #with Image.open(images[cell_chosen]) as img: 
+        #    cell_image = np.zeros((img.size[1], img.size[0], img.n_frames))
+        #    for i in range(img.n_frames):
+        #       img.seek(i)
+        #       cell_image[:, :, i] = np.array(img)
+        #       cell_image[:, :, i] = skimage.exposure.equalize_adapthist(np.array(img))
+        cell_image = skimage.io.imread(images[cell_chosen])
         cell_rotated = skimage.transform.rotate(cell_image, angle, resize=True)
         mask_rotated = skimage.transform.rotate(np.array(cell_mask), angle, order=0, resize=True)
         cell_scaled = skimage.transform.rescale(cell_rotated, scaling_factor, anti_aliasing=True)
@@ -1007,13 +996,13 @@ class CellType:
 
 if __name__== "__main__":
     mass_list = [744.55,760.58,369.35,958.78]
-    parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+    parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 15, 3],
                 mass_list[2] : ["normal", 15, 3],
                 mass_list[3] : ["normal", 10, 15]
                 }
-    parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+    parameters_B = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 22, 3],
                 mass_list[2] : ["uniform", 0, 0],
@@ -1026,20 +1015,19 @@ if __name__== "__main__":
     valid = Validator(
         use_perfect_segmentation=True, 
         use_perfect_registration=False, 
-        allow_multiplets=True,
         remove_ambiguous=False,
         seed=2566, 
         scale=1.0, 
         teaching_imprecision=10, 
-        rotation=0, 
+        rotation=0.1, 
         ms_spacing=5,
         mic_spacing=0.325, 
         plot=True, 
         save_img=True, 
-        canvas_size=1500, 
+        canvas_size=1000, 
         cell_density=0.2, 
         mass_list=mass_list,
-        cell_types = [A, B],
+        cell_types = [A],
         render_animation=False,
         diffusion_total_time=0.0,
         diffusion_dt=1,

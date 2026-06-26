@@ -292,6 +292,7 @@ def generate_and_plot_canvases(validator):
         my_cmap = plt.cm.prism.copy()
         my_cmap.set_bad(color="black")
         ax_mask.imshow(masked_canvas, cmap=my_cmap)
+        ax_mask.set_title("Ground Truth Mask Canvas")
         ax_mask.axis("off")
 
         # --- MSI Canvas Origin Resolution ---
@@ -398,7 +399,8 @@ def generate_and_plot_canvases(validator):
 
         for j in range(max_panels, len(axes_flat)):
             axes_flat[j].axis("off")
-
+        #if validator.plot:
+        #    plt.show()
         # --- Save if requested ---
         if validator.save_img:
             fig_mic.savefig(
