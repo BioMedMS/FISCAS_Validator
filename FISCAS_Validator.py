@@ -1045,24 +1045,15 @@ if __name__== "__main__":
         use_perfect_registration=False, 
         allow_multiplets=True,
         remove_ambiguous=False,
-<<<<<<< HEAD
-        seed=42, 
-=======
         seed=1, 
->>>>>>> 22-improve-intracellular-signal-distribution
         scale=1.0, 
         teaching_imprecision=10, 
         rotation=0, 
         ms_spacing=5,
         mic_spacing=0.325, 
         plot=True, 
-<<<<<<< HEAD
-        save_img=True, 
-        canvas_size=1500, 
-=======
         save_img=False, 
         canvas_size=1000, 
->>>>>>> 22-improve-intracellular-signal-distribution
         cell_density=0.2, 
         mass_list=mass_list,
         cell_types = [A, B],
