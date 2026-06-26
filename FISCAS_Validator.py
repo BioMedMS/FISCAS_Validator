@@ -50,7 +50,7 @@ class Validator:
         use_perfect_segmentation=True, # skip segmentation by using the ground truth masks
         teaching_imprecision=10,  # accuracy of landmark registration in µm
         canvas_size=2000,  # in µm
-        mic_spacing=0.325,  # pixel size of microscope canvas in µm 10X ~ 0.65; 20X ~ 0.325; 50X ~ 0.13
+        mic_spacing=0.6897,  # pixel size of microscope canvas in µm 10X ~ 0.65; 20X ~ 0.325; 50X ~ 0.13
         ms_spacing=1,  # pixel size of msi in µm
         cell_density=0.2,  # percentage of total canvas area
         max_cell_placement_iterations=1000, # max attempts to place cells on canvas
@@ -1033,7 +1033,7 @@ if __name__== "__main__":
 
     valid = Validator(
         use_perfect_segmentation=True, 
-        use_perfect_registration=False, 
+        use_perfect_registration=True, 
         remove_ambiguous=False,
         seed=2566,  
         scale=1.0, 

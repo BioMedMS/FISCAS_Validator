@@ -171,13 +171,13 @@ def generate_and_plot_canvases(validator):
                     p_top_left[1]:p_top_left[1] + len(cell),
                     p_top_left[0]:p_top_left[0] + len(cell[0]),
                     1
-                ] += cell[:, :, 0]
+                ] += cell[:, :, 1]
 
                 validator.mic_canvas[
                     p_top_left[1]:p_top_left[1] + len(cell),
                     p_top_left[0]:p_top_left[0] + len(cell[0]),
                     2
-                ] += cell[:, :, 1]
+                ] += cell[:, :, 2]
 
                 validator.mask_canvas[
                     p_top_left[1]:p_top_left[1] + len(mask),
@@ -399,8 +399,8 @@ def generate_and_plot_canvases(validator):
 
         for j in range(max_panels, len(axes_flat)):
             axes_flat[j].axis("off")
-        if validator.plot:
-            plt.show()
+        #if validator.plot:
+        #    plt.show()
         # --- Save if requested ---
         if validator.save_img:
             fig_mic.savefig(
@@ -434,13 +434,13 @@ def generate_and_plot_canvases(validator):
                 dpi=600,
             )
             
-        plt.close(fig_mic)
-        plt.close(fig_mask)
-        plt.close(fig_cell)
-        plt.close(fig_diff)
-        plt.close(fig_panel)
-        plt.close(fig_coords)
-        plt.close(fig_grid)
+        #plt.close(fig_mic)
+        #plt.close(fig_mask)
+        #plt.close(fig_cell)
+        #plt.close(fig_diff)
+        #plt.close(fig_panel)
+        #plt.close(fig_coords)
+        #plt.close(fig_grid)
 
                 
 
