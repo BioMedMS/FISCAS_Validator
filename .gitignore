@@ -11,7 +11,17 @@
 __pycache__/
 *.pkl
 *.xlsx
-
+*.csv
+*.jpg
+*.png
+*.npy
+*.imzML
+*.ibd
+*.slx
+*.sbd
+*.tif
+*.tiff
+*.icache
 
 **/*.quarto_ipynb
 render_animation.py
