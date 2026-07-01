@@ -247,7 +247,7 @@ class Validator:
         cell = cell_type
         for i in range(len(self.mass_list)):
             factor = cell.get_intensity(self.mass_list[i])
-            rescaled_intensities = intensities #/ np.sum(intensities) * factor
+            rescaled_intensities = intensities / np.sum(intensities) * factor
             intensities_all_mz[:,:, i] = rescaled_intensities
         return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
