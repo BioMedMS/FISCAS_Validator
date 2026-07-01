@@ -237,7 +237,7 @@ class Validator:
         cell = cell_type
         for i in range(len(self.mass_list)):
             factor = cell.get_intensity(self.mass_list[i])
-            rescaled_intensities = intensities #/ np.sum(intensities) * factor
+            rescaled_intensities = intensities / np.sum(intensities) * factor
             intensities_all_mz[:,:, i] = rescaled_intensities
         return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
@@ -885,18 +885,19 @@ class Validator:
                         spectra_comparison.append((meas_int-true_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 else:
                     mask_id = 0
                     canvas_to_mask[key] = mask_id
                     true_int = self.cell_intensities[key][i]
+            
                     meas_int = 0
                     cells_missed += 1
                     if true_int != 0:
                         spectra_comparison.append((meas_int-true_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 
             
             spectra_comparison = np.array(spectra_comparison) * 100
@@ -1015,12 +1016,12 @@ class CellType:
 if __name__== "__main__":
     mass_list = [744.55,760.58,369.35,958.78]
     parameters_A = {"path" : "./Cell_Library/DLD-1",
-                mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 15, 3],
+                mass_list[0] : ["normal", 0, 0], 
+                mass_list[1] : ["normal", 0, 0],
                 mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 10, 15]
+                mass_list[3] : ["normal", 0, 0]
                 }
-    parameters_B = {"path" : "./Cell_Library/DLD-1",
+    parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 22, 3],
                 mass_list[2] : ["uniform", 0, 0],
@@ -1032,8 +1033,8 @@ if __name__== "__main__":
 
     valid = Validator(
         use_perfect_segmentation=True, 
-        use_perfect_registration=True, 
-        remove_ambiguous=False,
+        use_perfect_registration=False, 
+        remove_ambiguous=True,
         seed=2566,  
         scale=1.0, 
         teaching_imprecision=10, 
@@ -1045,7 +1046,7 @@ if __name__== "__main__":
         canvas_size=750, 
         cell_density=0.2, 
         mass_list=mass_list,
-        cell_types = [A],
+        cell_types = [A,B],
         render_animation=False,
         diffusion_total_time=0.0,
         diffusion_dt=1,

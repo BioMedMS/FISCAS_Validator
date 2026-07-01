@@ -37,24 +37,23 @@ use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
 canvas_size=1000
-mic_spacing=0.325
-ms_spacing=5
+mic_spacing=0.6897
+ms_spacing=20
 cell_density=0.2
 max_cell_placement_iterations=1000
-rotation=0
-scale=1.00
+rotation=5
+scale=1.02
 mass_list=[1, 2, 3, 4]
-seed=42
+seed=43
 plot=True
 save_img=True
 remove_ambiguous=False
 cell_diameter=120
-texture=None
+texture='registration'
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon_add=0.13
 texture_epsilon_multiply=0.3
-diffusion_total_time=00.0
-texture_epsilon=0.1
+diffusion_total_time=100.0
 diffusion_total_time=0.0
 diffusion_dt=1
 diffusion_coeff=[0.1,1,50,10]
@@ -68,21 +67,21 @@ if seed == 0:
     seed = random.randint(1, 10000)
 random.seed(seed)
 np.random.seed(seed)
-parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 15, 3],
                 mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 10, 15]
+                mass_list[3] : ["normal", 10, 3]
                 }
-parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 22, 3],
                 mass_list[2] : ["uniform", 0, 0],
-                mass_list[3] : ["normal", 22, 3]
+                mass_list[3] : ["normal", 22, 15]
                 }
 
-A = CellType("A", parameters_A, 0.5)
-B = CellType("B", parameters_B, 0.5)
+A = CellType("A", parameters_A, 0.6)
+B = CellType("B", parameters_B, 0.4)
 
 cell_types=[A,B]
 
@@ -266,7 +265,7 @@ for i in range(4):
 
 values.append(float(spectra_metrics['FPR']))
 values.append(float(cluster_metrics['adjusted_rand_index']))
-df = df.append(pd.Series(values, index=df.columns), ignore_index=True)
+df = pd.concat([df, pd.DataFrame([values], columns=df.columns)], ignore_index=True)
 df.to_csv(f"./output/summary/results_summary_{settings['ID']}.csv", index=False)
 ```
 

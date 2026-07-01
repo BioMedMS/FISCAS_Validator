@@ -48,7 +48,8 @@ remove_ambiguous=False
 cell_diameter=120
 texture=None
 texture_path=""
-texture_epsilon=0.1
+texture_epsilon_add=0.13
+texture_epsilon_multiply=0.3
 diffusion_total_time=0.0
 diffusion_dt=1
 diffusion_coeff=[0.1,1,50,10]
@@ -63,7 +64,8 @@ params_best_case = {
     "ms_spacing": 5,
     "texture": None,
     "texture_path": None,
-    "texture_epsilon": 0,
+    "texture_epsilon_add": 0.0,
+    "texture_epsilon_multiply": 0.0,
 }
 
 params_real_case = {
@@ -74,7 +76,8 @@ params_real_case = {
     "ms_spacing": 8,
     "texture": "registration",
     "texture_path": noise_texture,
-    "texture_epsilon": 0.1,
+    "texture_epsilon_add": 0.13,
+    "texture_epsilon_multiply": 0.3,
 }
 
 params_worst_case = {
@@ -85,10 +88,11 @@ params_worst_case = {
     "ms_spacing": 20,
     "texture": "registration",
     "texture_path": noise_gradient_texture,
-    "texture_epsilon": 0.5,
+    "texture_epsilon_add": 0.25,
+    "texture_epsilon_multiply": 0.5,
 }
 
-diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon = params_best_case.values()
+diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon_add, texture_epsilon_multiply = params_best_case.values()
 
 
 validator_instances = []
@@ -114,13 +118,13 @@ for j in seeds:
     np.random.seed(seed)
 
     # define cell populations
-    parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+    parameters_A = {"path" : "./Cell_images/microscopy/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 15, 3],
                 mass_list[2] : ["normal", 15, 3],
                 mass_list[3] : ["normal", 10, 15]
                 }
-    parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+    parameters_B = {"path" : "./Cell_images/microscopy/Colo205",
                     mass_list[0] : ["normal", 15, 5], 
                     mass_list[1] : ["normal", 22, 3],
                     mass_list[2] : ["uniform", 0, 0],
@@ -160,7 +164,8 @@ for j in seeds:
         diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary,
         texture=texture,
         texture_path=texture_path,
-        texture_epsilon=texture_epsilon)
+        texture_epsilon_add=texture_epsilon_add,
+        texture_epsilon_multiply=texture_epsilon_multiply)
 
     validator_instances.append(A)
     
