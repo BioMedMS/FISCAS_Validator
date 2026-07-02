@@ -859,6 +859,10 @@ class Validator:
             f_histograms, axes = plt.subplots(grid_size, grid_size, figsize=(6,4))
             axes = axes.flatten()
 
+        self.measured_intensities = {}
+        for key, _ in self.msi_coordinates.items():
+            self.measured_intensities[key] = np.zeros(len(self.mass_list))
+
         for i in range(len(self.mass_list)):
             spectra_comparison = []
             for key, value in self.msi_coordinates.items():
@@ -880,6 +884,7 @@ class Validator:
                     #print(f"at mz {mass_list[i]} cell {key} assigned to mask {mask_id}, true intensity: {self.cell_intensities[key][i]}, measured intensity: {cells[mask_id][i]}")
                     true_int = self.cell_intensities[key][i]
                     meas_int = cells[mask_id][i]
+                    self.measured_intensities[key][i] = copy.copy(meas_int)
                     
                     if true_int != 0:
                         spectra_comparison.append((meas_int-true_int)/true_int)
@@ -892,6 +897,7 @@ class Validator:
                     true_int = self.cell_intensities[key][i]
             
                     meas_int = 0
+                    self.measured_intensities[key][i] = copy.copy(meas_int)
                     cells_missed += 1
                     if true_int != 0:
                         spectra_comparison.append((meas_int-true_int)/true_int)
@@ -911,9 +917,11 @@ class Validator:
             cells_missed_all_mz.append(np.sum(spectra_comparison==100))
         if self.save_img:
             f_histograms.savefig(self.output + "/spectra_hist.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-        spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
-        np.save(self.output + "/true_spectra.npy", spectra)
-        standardized_spectra = StandardScaler().fit_transform(spectra)
+        true_spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
+        measured_spectra = np.asarray(list(self.measured_intensities.values()))
+        np.save(self.output + "/true_spectra.npy", true_spectra)
+        np.save(self.output + "/measured_spectra.npy", measured_spectra)
+        standardized_spectra = StandardScaler().fit_transform(measured_spectra)
         np.save(self.output + "/standardized_spectra.npy", standardized_spectra)
         np.save(self.output + "/cell_labels.npy", np.array(list(self.cell_labels.values())))
         kmeans = KMeans(n_clusters=len(self.cell_types), random_state=self.seed)
@@ -1016,34 +1024,34 @@ class CellType:
 if __name__== "__main__":
     mass_list = [744.55,760.58,369.35,958.78]
     parameters_A = {"path" : "./Cell_Library/DLD-1",
-                mass_list[0] : ["normal", 0, 0], 
-                mass_list[1] : ["normal", 0, 0],
-                mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 0, 0]
-                }
+                    mass_list[0] : ["normal", 15, 5], 
+                    mass_list[1] : ["normal", 15, 3],
+                    mass_list[2] : ["normal", 15, 3],
+                    mass_list[3] : ["normal", 10, 3]
+                    }
     parameters_B = {"path" : "./Cell_Library/Colo205",
-                mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 22, 3],
-                mass_list[2] : ["uniform", 0, 0],
-                mass_list[3] : ["normal", 22, 3]
-                }
+                    mass_list[0] : ["normal", 15, 5], 
+                    mass_list[1] : ["normal", 20, 5],
+                    mass_list[2] : ["normal", 11, 3],
+                    mass_list[3] : ["normal", 22, 15]
+                    }
 
-    A = CellType("A", parameters_A, 0.5)
-    B = CellType("B", parameters_B, 0.5)
+    A = CellType("A", parameters_A, 0.6)
+    B = CellType("B", parameters_B, 0.4)
 
     valid = Validator(
         use_perfect_segmentation=True, 
         use_perfect_registration=False, 
-        remove_ambiguous=True,
-        seed=2566,  
-        scale=1.0, 
+        remove_ambiguous=False,
+        seed=43,  
+        scale=1.05, 
         teaching_imprecision=10, 
-        rotation=0.1, 
+        rotation=5.0, 
         ms_spacing=5,
         mic_spacing=0.6897, 
         plot=True, 
         save_img=False, 
-        canvas_size=750, 
+        canvas_size=1000, 
         cell_density=0.2, 
         mass_list=mass_list,
         cell_types = [A,B],

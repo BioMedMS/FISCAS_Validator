@@ -41,8 +41,8 @@ mic_spacing=0.6897
 ms_spacing=20
 cell_density=0.2
 max_cell_placement_iterations=1000
-rotation=5
-scale=1.02
+rotation=0.2
+scale=1.0
 mass_list=[1, 2, 3, 4]
 seed=43
 plot=True
@@ -54,7 +54,6 @@ texture_path="./textures/noise_150x150.jpg"
 texture_epsilon_add=0.13
 texture_epsilon_multiply=0.3
 diffusion_total_time=100.0
-diffusion_total_time=0.0
 diffusion_dt=1
 diffusion_coeff=[0.1,1,50,10]
 diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
@@ -75,8 +74,8 @@ parameters_A = {"path" : "./Cell_Library/DLD-1",
                 }
 parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 22, 3],
-                mass_list[2] : ["uniform", 0, 0],
+                mass_list[1] : ["normal", 20, 5],
+                mass_list[2] : ["normal", 11, 3],
                 mass_list[3] : ["normal", 22, 15]
                 }
 
