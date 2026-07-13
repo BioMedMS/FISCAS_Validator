@@ -1,0 +1,11 @@
+remove_ambiguous = False
+
+best: 9, 1, 1, 201
+real: 144, 6, 36, 1504
+worst: 718, 7, 45, 1549
+
+remove_ambiguous = True
+
+best: 3, 3, 3, 3
+real: 12, 7, 19, 1569
+worst: 49, 28, 19, 2307

@@ -38,25 +38,25 @@ use_perfect_segmentation=True
 teaching_imprecision=10
 canvas_size=1000
 mic_spacing=0.6897
-ms_spacing=20
+ms_spacing=5
 cell_density=0.2
 max_cell_placement_iterations=1000
 rotation=0.2
-scale=1.0
+scale=1.00
 mass_list=[1, 2, 3, 4]
 seed=43
 plot=True
 save_img=True
-remove_ambiguous=False
+remove_ambiguous=True
 cell_diameter=120
 texture='registration'
 texture_path="./textures/noise_150x150.jpg"
 texture_epsilon_add=0.13
 texture_epsilon_multiply=0.3
-diffusion_total_time=100.0
+diffusion_total_time=70.0
 diffusion_dt=1
-diffusion_coeff=[0.1,1,50,10]
-diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
+diffusion_coeff=[0.54,6.54,9.92,23.57]
+diffusion_barrier_alpha=[0.047,0.059,0.061,0.145]
 diffusion_leaky_outer_boundary=True
 ```
 
@@ -68,15 +68,15 @@ random.seed(seed)
 np.random.seed(seed)
 parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 15, 3],
-                mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 10, 3]
+                mass_list[1] : ["normal", 22, 5],
+                mass_list[2] : ["normal", 9, 5],
+                mass_list[3] : ["normal", 15, 5]
                 }
 parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 20, 5],
-                mass_list[2] : ["normal", 11, 3],
-                mass_list[3] : ["normal", 22, 15]
+                mass_list[1] : ["normal", 10, 3],
+                mass_list[2] : ["normal", 40, 15],
+                mass_list[3] : ["uniform", 0, 0]    
                 }
 
 A = CellType("A", parameters_A, 0.6)

@@ -135,7 +135,7 @@ class Validator:
                             y = (1 / (s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - m) / s) ** 2)
                         if cell_type.parameters[mz][0] == "uniform":
                             y = np.where((x >= m - s) & (x <= m + s), 1/(2*s), 0)
-                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - " + "$\it{m/z}$ " + f"{mz} (μ={m}, σ={s})", color=colors[c])
+                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - " + "{m/z}" + f"{mz} (μ={m}, σ={s})", color=colors[c])
                         ax[k//2, k%2].legend(loc='lower center', bbox_to_anchor=(0.5, 1), ncol=1)
                     except Exception as e:
                         continue
@@ -237,7 +237,7 @@ class Validator:
         cell = cell_type
         for i in range(len(self.mass_list)):
             factor = cell.get_intensity(self.mass_list[i])
-            rescaled_intensities = intensities / np.sum(intensities) * factor
+            rescaled_intensities = intensities * factor
             intensities_all_mz[:,:, i] = rescaled_intensities
         return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
@@ -890,7 +890,7 @@ class Validator:
                         spectra_comparison.append((meas_int-true_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 else:
                     mask_id = 0
                     canvas_to_mask[key] = mask_id
@@ -903,7 +903,7 @@ class Validator:
                         spectra_comparison.append((meas_int-true_int)/true_int)
                     else:
                         deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
                 
             
             spectra_comparison = np.array(spectra_comparison) * 100
@@ -921,7 +921,9 @@ class Validator:
         measured_spectra = np.asarray(list(self.measured_intensities.values()))
         np.save(self.output + "/true_spectra.npy", true_spectra)
         np.save(self.output + "/measured_spectra.npy", measured_spectra)
-        standardized_spectra = StandardScaler().fit_transform(measured_spectra)
+        measured_spectra_sum = np.sum(measured_spectra, axis=1, keepdims=True)
+        measured_spectra_sum[measured_spectra_sum == 0] = 1
+        standardized_spectra = StandardScaler().fit_transform(measured_spectra/measured_spectra_sum)
         np.save(self.output + "/standardized_spectra.npy", standardized_spectra)
         np.save(self.output + "/cell_labels.npy", np.array(list(self.cell_labels.values())))
         kmeans = KMeans(n_clusters=len(self.cell_types), random_state=self.seed)

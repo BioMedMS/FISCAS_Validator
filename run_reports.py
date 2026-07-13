@@ -8,6 +8,9 @@ import copy
 import pandas as pd
 import glob
 import re
+import warnings
+warnings.filterwarnings("ignore")
+
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
@@ -34,7 +37,7 @@ use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
 canvas_size=1500
-mic_spacing=0.325
+mic_spacing=0.6897
 ms_spacing=5
 cell_density=0.2
 max_cell_placement_iterations=1000
@@ -44,7 +47,7 @@ mass_list=[1, 2, 3, 4]
 seed=42
 plot=False
 save_img=True
-remove_ambiguous=False
+remove_ambiguous=True
 cell_diameter=120
 texture=None
 texture_path=""
@@ -52,13 +55,13 @@ texture_epsilon_add=0.13
 texture_epsilon_multiply=0.3
 diffusion_total_time=0.0
 diffusion_dt=1
-diffusion_coeff=[0.1,1,50,10]
-diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
+diffusion_coeff=[0.1,1,10,50]
+diffusion_barrier_alpha=[0.1,0.3,0.5,0.7]
 diffusion_leaky_outer_boundary=True
 
 params_best_case = {
     "diffusion_total_time": 0,
-    "remove_ambiguous": False,
+    "remove_ambiguous": True,
     "rotation": 0,
     "scale": 1.0,
     "ms_spacing": 5,
@@ -70,7 +73,7 @@ params_best_case = {
 
 params_real_case = {
     "diffusion_total_time": 100,
-    "remove_ambiguous": False,
+    "remove_ambiguous": True,
     "rotation": 0.2,
     "scale": 1.005,
     "ms_spacing": 8,
@@ -82,7 +85,7 @@ params_real_case = {
 
 params_worst_case = {
     "diffusion_total_time": 300,
-    "remove_ambiguous": False,
+    "remove_ambiguous": True,
     "rotation": 5,
     "scale": 1.05,
     "ms_spacing": 20,
@@ -92,13 +95,13 @@ params_worst_case = {
     "texture_epsilon_multiply": 0.5,
 }
 
-diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon_add, texture_epsilon_multiply = params_best_case.values()
+diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon_add, texture_epsilon_multiply = params_worst_case.values()
 
 
 validator_instances = []
 result_files = glob.glob(output_dir + "/*.csv")
 finished_seeds = []
-seeds = list(range(1,300))
+seeds = list(range(1,21))
 for file in result_files:
     m = re.search(r'seed_(\d+)', file)
     seed_num = int(m.group(1)) if m else None
@@ -118,18 +121,18 @@ for j in seeds:
     np.random.seed(seed)
 
     # define cell populations
-    parameters_A = {"path" : "./Cell_images/microscopy/DLD-1",
+    parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 15, 3],
                 mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 10, 15]
+                mass_list[3] : ["normal", 9, 5]
                 }
-    parameters_B = {"path" : "./Cell_images/microscopy/Colo205",
-                    mass_list[0] : ["normal", 15, 5], 
-                    mass_list[1] : ["normal", 22, 3],
-                    mass_list[2] : ["uniform", 0, 0],
-                    mass_list[3] : ["normal", 22, 3]
-                    }
+    parameters_B = {"path" : "./Cell_Library/Colo205",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 20, 5],
+                mass_list[2] : ["normal", 11, 3],
+                mass_list[3] : ["normal", 28, 15]
+                }
 
     A = CellType("A", parameters_A, 0.5)
     B = CellType("B", parameters_B, 0.5)
@@ -202,8 +205,7 @@ def run_validator(A):
 
     values.append(float(spectra_metrics['FPR']))
     values.append(float(cluster_metrics['adjusted_rand_index']))
-    df = pd.concat([df,pd.Series(values, index=df.columns)], ignore_index=True)
-
+    df = pd.concat([df, pd.DataFrame([values], columns=df.columns)], axis=0, ignore_index=True)
 
     df.to_csv(output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
 

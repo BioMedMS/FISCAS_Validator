@@ -373,7 +373,7 @@ def generate_and_plot_canvases(validator):
 
         x_coords = [xy[0] for xy in validator.msi_coordinates.values()]
         y_coords = [xy[1] for xy in validator.msi_coordinates.values()]
-        ax_coords.scatter(x_coords, y_coords, color="red", s=10, marker="x")
+        ax_coords.scatter(x_coords, y_coords, color="deepskyblue", s=10, marker="x")
 
         # --- Grid of MSI channels ---
         grid_size = int(np.ceil(np.sqrt(len(validator.mass_list))))

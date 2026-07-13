@@ -1,0 +1,41 @@
+canvas_size: 1500
+cell_density: 0.2
+cell_diameter: 0
+cell_types:
+- A
+- B
+diffusion_barrier_alpha:
+- 0.1
+- 0.3
+- 0.5
+- 0.7
+diffusion_coeff:
+- 0.1
+- 1
+- 10
+- 50
+diffusion_dt: 1
+diffusion_leaky_outer_boundary: true
+diffusion_total_time: 0
+mass_list:
+- 1
+- 2
+- 3
+- 4
+max_cell_placement_iterations: 1000
+mic_spacing: 0.7142857142857143
+ms_spacing: 5
+output: d:/Jan/fiscas-validationKit/output/run_2
+plot: false
+remove_ambiguous: false
+rotation: 0
+save_img: true
+scale: 1.0
+seed: 2
+teaching_imprecision: 10
+texture: null
+texture_epsilon_add: 0.0
+texture_epsilon_multiply: 0.0
+texture_path: null
+use_perfect_registration: false
+use_perfect_segmentation: true
