@@ -912,9 +912,9 @@ class Validator:
                 if i < 25:
                     axes[i].hist(spectra_comparison, bins=100)
                     axes[i].set_title(f"m/z {self.mass_list[i]}")
-            spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison[spectra_comparison!=100])))
-            spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
-            cells_missed_all_mz.append(np.sum(spectra_comparison==100))
+            spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison[spectra_comparison!=-100])))
+            spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=-100]),2))
+            cells_missed_all_mz.append(np.sum(spectra_comparison==-100))
         if self.save_img:
             f_histograms.savefig(self.output + "/spectra_hist.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         true_spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
@@ -922,13 +922,14 @@ class Validator:
         np.save(self.output + "/true_spectra.npy", true_spectra)
         np.save(self.output + "/measured_spectra.npy", measured_spectra)
         measured_spectra_sum = np.sum(measured_spectra, axis=1, keepdims=True)
-        measured_spectra_sum[measured_spectra_sum == 0] = 1
-        standardized_spectra = StandardScaler().fit_transform(measured_spectra/measured_spectra_sum)
+        mask = measured_spectra_sum != 0
+        mask = mask[:,0]
+        standardized_spectra = StandardScaler().fit_transform(measured_spectra[mask, :]/measured_spectra_sum[mask])
         np.save(self.output + "/standardized_spectra.npy", standardized_spectra)
         np.save(self.output + "/cell_labels.npy", np.array(list(self.cell_labels.values())))
         kmeans = KMeans(n_clusters=len(self.cell_types), random_state=self.seed)
         predicted_labels = kmeans.fit_predict(standardized_spectra)
-        true_labels = np.array(list(self.cell_labels.values()))
+        true_labels = np.array(list(self.cell_labels.values()))[mask]
         adjusted_rand = adjusted_rand_score(true_labels, predicted_labels)
         cont_matrix = contingency_matrix(true_labels, predicted_labels)
         self.cluster_metrics["contingency_matrix"] = cont_matrix
