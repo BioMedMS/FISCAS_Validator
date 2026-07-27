@@ -36,7 +36,7 @@ output="./output/"
 use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
-canvas_size=1500
+canvas_size=1000
 mic_spacing=0.6897
 ms_spacing=5
 cell_density=0.2
@@ -61,7 +61,7 @@ diffusion_leaky_outer_boundary=True
 
 params_best_case = {
     "diffusion_total_time": 0,
-    "remove_ambiguous": True,
+    "remove_ambiguous": False,
     "rotation": 0,
     "scale": 1.0,
     "ms_spacing": 5,
@@ -72,11 +72,11 @@ params_best_case = {
 }
 
 params_real_case = {
-    "diffusion_total_time": 100,
-    "remove_ambiguous": True,
+    "diffusion_total_time": 50,
+    "remove_ambiguous": False,
     "rotation": 0.2,
     "scale": 1.005,
-    "ms_spacing": 8,
+    "ms_spacing": 10,
     "texture": "registration",
     "texture_path": noise_texture,
     "texture_epsilon_add": 0.13,
@@ -84,8 +84,8 @@ params_real_case = {
 }
 
 params_worst_case = {
-    "diffusion_total_time": 300,
-    "remove_ambiguous": True,
+    "diffusion_total_time": 100,
+    "remove_ambiguous": False,
     "rotation": 5,
     "scale": 1.05,
     "ms_spacing": 20,
@@ -95,7 +95,7 @@ params_worst_case = {
     "texture_epsilon_multiply": 0.5,
 }
 
-diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon_add, texture_epsilon_multiply = params_worst_case.values()
+diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon_add, texture_epsilon_multiply = params_best_case.values()
 
 
 validator_instances = []
@@ -123,15 +123,15 @@ for j in seeds:
     # define cell populations
     parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 15, 3],
-                mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 9, 5]
+                mass_list[1] : ["normal", 22, 5],
+                mass_list[2] : ["normal", 33, 3],
+                mass_list[3] : ["normal", 15, 5]
                 }
     parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 20, 5],
-                mass_list[2] : ["normal", 11, 3],
-                mass_list[3] : ["normal", 28, 15]
+                mass_list[1] : ["normal", 10, 3],
+                mass_list[2] : ["normal", 40, 20],
+                mass_list[3] : ["normal", 0, 1]    
                 }
 
     A = CellType("A", parameters_A, 0.5)

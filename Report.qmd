@@ -41,8 +41,8 @@ mic_spacing=0.6897
 ms_spacing=20
 cell_density=0.2
 max_cell_placement_iterations=1000
-rotation=0.2
-scale=1.00
+rotation=0.5
+scale=1.05
 mass_list=[1, 2, 3, 4]
 seed=43
 plot=True
@@ -69,13 +69,13 @@ np.random.seed(seed)
 parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 22, 5],
-                mass_list[2] : ["normal", 9, 5],
+                mass_list[2] : ["normal", 33, 3],
                 mass_list[3] : ["normal", 15, 5]
                 }
 parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
                 mass_list[1] : ["normal", 10, 3],
-                mass_list[2] : ["normal", 40, 15],
+                mass_list[2] : ["normal", 40, 20],
                 mass_list[3] : ["normal", 0, 1]    
                 }
 

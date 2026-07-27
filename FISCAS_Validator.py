@@ -886,11 +886,11 @@ class Validator:
                     meas_int = cells[mask_id][i]
                     self.measured_intensities[key][i] = copy.copy(meas_int)
                     
-                    if true_int != 0:
-                        spectra_comparison.append((meas_int-true_int)/true_int)
-                    else:
-                        deviation[mask_id][i] = meas_int
-                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #if true_int != 0:
+                    spectra_comparison.append((meas_int-true_int)/(true_int+meas_int))
+                    #else:
+                    #    deviation[mask_id][i] = meas_int
+                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
                 else:
                     mask_id = 0
                     canvas_to_mask[key] = mask_id
@@ -899,22 +899,22 @@ class Validator:
                     meas_int = 0
                     self.measured_intensities[key][i] = copy.copy(meas_int)
                     cells_missed += 1
-                    if true_int != 0:
-                        spectra_comparison.append((meas_int-true_int)/true_int)
-                    else:
-                        deviation[mask_id][i] = meas_int
-                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #if true_int != 0:
+                    spectra_comparison.append((meas_int-true_int)/(true_int+meas_int))
+                    #else:
+                    #    deviation[mask_id][i] = meas_int
+                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
                 
             
-            spectra_comparison = np.array(spectra_comparison) * 100
+            spectra_comparison = np.array(spectra_comparison)
             spectra_comparison = spectra_comparison[~np.isnan(spectra_comparison) & ~np.isinf(spectra_comparison)]
             if self.plot or self.save_img:
                 if i < 25:
                     axes[i].hist(spectra_comparison, bins=100)
                     axes[i].set_title(f"m/z {self.mass_list[i]}")
-            spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison[spectra_comparison!=-100])))
-            spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=-100]),2))
-            cells_missed_all_mz.append(np.sum(spectra_comparison==-100))
+            spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison)))
+            spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison),2))
+            cells_missed_all_mz.append(np.sum(spectra_comparison==-1))
         if self.save_img:
             f_histograms.savefig(self.output + "/spectra_hist.svg", bbox_inches='tight', pad_inches=0, dpi=600)
         true_spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
@@ -1025,31 +1025,31 @@ class CellType:
         return self.parameters["path"]
 
 if __name__== "__main__":
-    mass_list = [744.55,760.58,369.35,958.78]
+    mass_list = [1,2,3,4]
     parameters_A = {"path" : "./Cell_Library/DLD-1",
-                    mass_list[0] : ["normal", 15, 5], 
-                    mass_list[1] : ["normal", 15, 3],
-                    mass_list[2] : ["normal", 15, 3],
-                    mass_list[3] : ["normal", 10, 3]
-                    }
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 22, 5],
+                mass_list[2] : ["normal", 9, 5],
+                mass_list[3] : ["normal", 15, 5]
+                }
     parameters_B = {"path" : "./Cell_Library/Colo205",
-                    mass_list[0] : ["normal", 15, 5], 
-                    mass_list[1] : ["normal", 20, 5],
-                    mass_list[2] : ["normal", 11, 3],
-                    mass_list[3] : ["normal", 22, 15]
-                    }
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 10, 3],
+                mass_list[2] : ["normal", 40, 15],
+                mass_list[3] : ["normal", 0, 1]    
+                }
 
     A = CellType("A", parameters_A, 0.6)
     B = CellType("B", parameters_B, 0.4)
 
     valid = Validator(
         use_perfect_segmentation=True, 
-        use_perfect_registration=False, 
-        remove_ambiguous=False,
+        use_perfect_registration=True, 
+        remove_ambiguous=True,
         seed=43,  
-        scale=1.05, 
+        scale=1.0, 
         teaching_imprecision=10, 
-        rotation=5.0, 
+        rotation=0.2, 
         ms_spacing=5,
         mic_spacing=0.6897, 
         plot=True, 
@@ -1061,8 +1061,8 @@ if __name__== "__main__":
         render_animation=False,
         diffusion_total_time=0.0,
         diffusion_dt=1,
-        diffusion_coeff=[0.1,1,50,10],
-        diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
+        diffusion_coeff=[0.54,6.54,9.92,23.57],
+        diffusion_barrier_alpha=[0.047,0.059,0.061,0.145],
         diffusion_leaky_outer_boundary=True,
         texture='registration',
         texture_path="./textures/noise_gradient_150x150.jpg",
