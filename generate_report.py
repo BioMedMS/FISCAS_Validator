@@ -41,6 +41,9 @@ def main(file_path):
     params_dict = {k: clean_value(v) for k, v in raw_dict.items()}
     params_dict["output"] = output_dir  # Use the CSV filename (without extension) as the output folder name
     # Save to a perfectly formatted .yml file
+    #params_dict["texture"] = "all"
+    params_dict["texture_path"] = "./textures/noise_100x100_v2.jpg"
+    #params_dict["rotation"] = 5
     params_file = "./params.yml"
     if "output" in params_dict and isinstance(params_dict["output"], str):
         params_dict["output"] = params_dict["output"].replace("\\", "/")

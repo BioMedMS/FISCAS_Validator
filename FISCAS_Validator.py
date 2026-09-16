@@ -117,6 +117,7 @@ class Validator:
         np.random.seed(self.seed)
 
         if self.plot or self.save_img:
+            plt.rcParams.update({'font.size': 30})
             n = len(self.mass_list)
             c = int(np.ceil(np.sqrt(n)))
             fig, ax = plt.subplots(c, c, figsize=(6,6)) 
@@ -135,7 +136,7 @@ class Validator:
                             y = (1 / (s * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - m) / s) ** 2)
                         if cell_type.parameters[mz][0] == "uniform":
                             y = np.where((x >= m - s) & (x <= m + s), 1/(2*s), 0)
-                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - " + "{m/z}" + f"{mz} (μ={m}, σ={s})", color=colors[c])
+                        ax[k//2,k%2].plot(x, y, label=f"{cell_type.name} - " + "$\it{m/z}$ " + f"{mz} (μ={m}, σ={s})", color=colors[c])
                         ax[k//2, k%2].legend(loc='lower center', bbox_to_anchor=(0.5, 1), ncol=1)
                     except Exception as e:
                         continue
@@ -412,11 +413,11 @@ class Validator:
         error = np.array(error)
         if self.plot or self.save_img:
             fig, ax = plt.subplots(figsize=(6,6))
-            radii = [1,3,5,7,10]
+            radii = [1,3,5,7,10, 20]
             for radius in radii:
-                circle = plt.Circle((0, 0), radius, color='grey', fill=False, linestyle='-', linewidth=0.5)
+                circle = plt.Circle((0, 0), radius, color='grey', fill=False, linestyle='-', linewidth=1)
                 ax.add_artist(circle)
-                ax.text(0, -radius, str(radius), fontsize=12, ha='center', va='center', color='grey',
+                ax.text(0, -radius, str(radius), fontsize=30, ha='center', va='center', color='grey',
                     bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
             ax.set_aspect('equal', 'box')
             limit = max(radii) + 1
@@ -425,8 +426,8 @@ class Validator:
             #ax.set_xlabel('Error X in µm')
             #ax.set_ylabel('Error Y in µm')
             #ax.set_title('Registration Error Plot')
-            ax.scatter(0,0, color='grey', s=150, marker='+')
-            ax.scatter(error[:,0], error[:,1], color='blue', s=70, marker='.', zorder=10)
+            ax.scatter(0,0, color='grey', s=300, marker='+')
+            ax.scatter(error[:,0], error[:,1], color='blue', s=300, marker='.', zorder=10)
             plt.axis('off')
             if self.save_img:
                 plt.savefig(self.output + "/Registration_error_plot.svg", bbox_inches='tight', pad_inches=0, dpi=600)
@@ -890,7 +891,7 @@ class Validator:
                     spectra_comparison.append((meas_int-true_int)/(true_int+meas_int))
                     #else:
                     #    deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
                 else:
                     mask_id = 0
                     canvas_to_mask[key] = mask_id
@@ -903,15 +904,17 @@ class Validator:
                     spectra_comparison.append((meas_int-true_int)/(true_int+meas_int))
                     #else:
                     #    deviation[mask_id][i] = meas_int
-                    print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
                 
             
             spectra_comparison = np.array(spectra_comparison)
             spectra_comparison = spectra_comparison[~np.isnan(spectra_comparison) & ~np.isinf(spectra_comparison)]
+            np.save(self.output + f"/spectra_comparison_{i}.npy", spectra_comparison)   
             if self.plot or self.save_img:
                 if i < 25:
-                    axes[i].hist(spectra_comparison, bins=100)
+                    axes[i].hist(spectra_comparison, bins=100, range=(-1,1))
                     axes[i].set_title(f"m/z {self.mass_list[i]}")
+                    axes[i].set_xlim([-1, 1])
             spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison)))
             spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison),2))
             cells_missed_all_mz.append(np.sum(spectra_comparison==-1))
