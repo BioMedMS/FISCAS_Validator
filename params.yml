@@ -5,15 +5,15 @@ cell_types:
 - A
 - B
 diffusion_barrier_alpha:
-- 0.1
-- 0.3
-- 0.5
-- 0.7
+- 0.047
+- 0.059
+- 0.061
+- 0.145
 diffusion_coeff:
-- 0.1
-- 1
-- 10
-- 50
+- 0.54
+- 6.54
+- 9.92
+- 23.57
 diffusion_dt: 1
 diffusion_leaky_outer_boundary: true
 diffusion_total_time: 100
@@ -25,13 +25,13 @@ mass_list:
 max_cell_placement_iterations: 1000
 mic_spacing: 0.7142857142857143
 ms_spacing: 20
-output: ./output/generated_reports/seed_5
+output: ./output/generated_reports/seed_1
 plot: false
 remove_ambiguous: false
 rotation: 5
 save_img: true
 scale: 1.05
-seed: 5
+seed: 1
 teaching_imprecision: 10
 texture: registration
 texture_epsilon_add: 0.25

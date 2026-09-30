@@ -267,12 +267,7 @@ def generate_and_plot_canvases(validator):
     )
 
 
-    for i in range(len(validator.mass_list)):
-        validator.ms_canvas[:, :, i] = skimage.measure.block_reduce(
-            validator.diffusion_canvas[:, :, i],
-            block_size=(int(ms_to_mic), int(ms_to_mic)),
-            func=np.sum
-        )
+    
 
     # plotting canvases if requested
     if validator.plot or validator.save_img:
@@ -296,7 +291,48 @@ def generate_and_plot_canvases(validator):
         ax_mask.set_title("Ground Truth Mask Canvas")
         ax_mask.axis("off")
 
+        
+
         # --- MSI Canvas Origin Resolution ---
+
+        fig_cell_panel, ax = plt.subplots(2, 2, figsize=(6, 6))
+        mgr = getattr(fig_cell_panel.canvas, "manager", None)
+        if mgr is not None and hasattr(mgr, "set_window_title"):
+            mgr.set_window_title("MSI Canvas After Diffusion")
+
+        ax[0, 0].imshow(
+            validator.cell_canvas[:, :, 0],
+            vmax=np.percentile(validator.cell_canvas[:, :, 0], 99.0),
+            cmap="inferno",
+        )
+        ax[0, 0].set_title(f"m/z {validator.mass_list[0]}")
+        ax[0, 0].axis("off")
+
+        ax[0, 1].imshow(
+            validator.cell_canvas[:, :, 1],
+            vmax=np.percentile(validator.cell_canvas[:, :, 1], 99.0),
+            cmap="inferno",
+        )
+        ax[0, 1].set_title(f"m/z {validator.mass_list[1]}")
+        ax[0, 1].axis("off")
+
+        ax[1, 0].imshow(
+            validator.cell_canvas[:, :, 2],
+            vmax=np.percentile(validator.cell_canvas[:, :, 2], 99.0),
+            cmap="inferno",
+        )
+        ax[1, 0].set_title(f"m/z {validator.mass_list[2]}")
+        ax[1, 0].axis("off")
+
+        ax[1, 1].imshow(
+            validator.cell_canvas[:, :, 3],
+            vmax=np.percentile(validator.cell_canvas[:, :, 3], 99.0),
+            cmap="inferno",
+        )
+        ax[1, 1].set_title(f"m/z {validator.mass_list[3]}")
+        ax[1, 1].axis("off")
+
+        
         fig_cell, ax_cell = plt.subplots(figsize=(6, 6))
         mgr = getattr(fig_cell.canvas, "manager", None)
         if mgr is not None and hasattr(mgr, "set_window_title"):
@@ -358,48 +394,7 @@ def generate_and_plot_canvases(validator):
         ax[1, 1].set_title(f"m/z {validator.mass_list[3]}")
         ax[1, 1].axis("off")
 
-        # --- Cell Coordinates on MSI Canvas ---
-        fig_coords, ax_coords = plt.subplots(figsize=(6, 6))
-        mgr = getattr(fig_coords.canvas, "manager", None)
-        if mgr is not None and hasattr(mgr, "set_window_title"):
-            mgr.set_window_title("Cell Coordinates on MSI Canvas")
-
-        ax_coords.imshow(
-            validator.ms_canvas[:, :, 0],
-            vmax=np.percentile(validator.ms_canvas[:, :, 0], 99.0),
-            cmap="inferno",
-        )
-        ax_coords.axis("off")
-
-        x_coords = [xy[0] for xy in validator.msi_coordinates.values()]
-        y_coords = [xy[1] for xy in validator.msi_coordinates.values()]
-        ax_coords.scatter(x_coords, y_coords, color="deepskyblue", s=10, marker="x")
-
-        # --- Grid of MSI channels ---
-        grid_size = int(np.ceil(np.sqrt(len(validator.mass_list))))
-        if grid_size > 5:
-            grid_size = 5  # limit grid size for better visibility
-
-        fig_grid, axes = plt.subplots(grid_size, grid_size, figsize=(6, 6))
-        mgr = getattr(fig_grid.canvas, "manager", None)
-        if mgr is not None and hasattr(mgr, "set_window_title"):
-            mgr.set_window_title("MSI Canvas (m/z grid)")
-
-        axes_flat = np.array(axes).reshape(-1)
-        max_panels = min(len(validator.mass_list), grid_size * grid_size)
-
-        for i, mz in enumerate(validator.mass_list[:max_panels]):
-            ax_i = axes_flat[i]
-            ax_i.set_title(f"m/z {mz}")
-            ax_i.imshow(
-                validator.ms_canvas[:, :, i],
-                vmax=np.percentile(validator.ms_canvas[:, :, i], 99.0),
-                cmap="inferno",
-            )
-            ax_i.axis("off")
-
-        for j in range(max_panels, len(axes_flat)):
-            axes_flat[j].axis("off")
+        
         #if validator.plot:
         #    plt.show()
         # --- Save if requested ---
@@ -416,24 +411,26 @@ def generate_and_plot_canvases(validator):
                 pad_inches=0,
                 dpi=600,
             )
+            skimage.io.imsave(validator.output + "/mask_canvas.tiff", validator.mask_canvas.astype(np.uint16))
             fig_cell.savefig(
                 validator.output + "/cell_canvas.svg",
                 bbox_inches="tight",
                 pad_inches=0,
                 dpi=600,
             )
-            fig_coords.savefig(
-                validator.output + "/msi_coordinates.svg",
-                bbox_inches="tight",
-                pad_inches=0,
-                dpi=600,
-            )
-            fig_grid.savefig(
-                validator.output + "/msi_canvas.svg",
-                bbox_inches="tight",
-                pad_inches=0,
-                dpi=600,
-            )
+            fig_panel.savefig(
+                            validator.output + "/panel_canvas.svg",
+                            bbox_inches="tight",
+                            pad_inches=0,
+                            dpi=600,
+                        )
+            fig_cell_panel.savefig(
+                            validator.output + "/cell_panel_canvas.svg",
+                            bbox_inches="tight",
+                            pad_inches=0,
+                            dpi=600,
+                        )
+            
             
         #plt.close(fig_mic)
         #plt.close(fig_mask)

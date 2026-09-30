@@ -412,12 +412,12 @@ class Validator:
             error.append(landmark_fixed - landmark_moving)
         error = np.array(error)
         if self.plot or self.save_img:
-            fig, ax = plt.subplots(figsize=(6,6))
-            radii = [1,3,5,7,10, 20]
+            fig, ax = plt.subplots(figsize=(2.5,2.5))
+            radii = [5,10,15,20]
             for radius in radii:
                 circle = plt.Circle((0, 0), radius, color='grey', fill=False, linestyle='-', linewidth=1)
                 ax.add_artist(circle)
-                ax.text(0, -radius, str(radius), fontsize=30, ha='center', va='center', color='grey',
+                ax.text(0, -radius, str(radius), fontsize=10, ha='center', va='center', color='grey',
                     bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
             ax.set_aspect('equal', 'box')
             limit = max(radii) + 1
@@ -426,8 +426,8 @@ class Validator:
             #ax.set_xlabel('Error X in µm')
             #ax.set_ylabel('Error Y in µm')
             #ax.set_title('Registration Error Plot')
-            ax.scatter(0,0, color='grey', s=300, marker='+')
-            ax.scatter(error[:,0], error[:,1], color='blue', s=300, marker='.', zorder=10)
+            ax.scatter(0,0, color='grey', s=200, marker='+')
+            ax.scatter(error[:,0], error[:,1], color='blue', s=30, marker='.', zorder=10, alpha=0.5)
             plt.axis('off')
             if self.save_img:
                 plt.savefig(self.output + "/Registration_error_plot.svg", bbox_inches='tight', pad_inches=0, dpi=600)
@@ -535,17 +535,51 @@ class Validator:
     def main(self):
         # create & plot canvases in separate module
         generate_and_plot_canvases(self)
+        ms_to_mic = self.ms_spacing / self.mic_spacing
+
+        print(self.diffusion_canvas[:,:,0].shape)
+        print(type(self.diffusion_canvas[:,:,0]))
+        print(self.diffusion_canvas[:,:,0].dtype)
+
 
         #print("perform pertubations...")
-        self.maldi_canvas = np.zeros(self.ms_canvas.shape)
-        maldi_sitk = sitk.GetImageFromArray(self.ms_canvas[:, :, 0])
-        maldi_sitk.SetSpacing((self.ms_spacing, self.ms_spacing))
+        img = skimage.measure.block_reduce(
+            self.diffusion_canvas[:,:,0],
+            block_size=(int(ms_to_mic), int(ms_to_mic)),
+            func=np.sum
+        )
+        self.maldi_canvas = np.zeros((img.shape[0], img.shape[1], len(self.mass_list)))
 
+        
         for i in range(len(self.mass_list)):
-            img = sitk.GetImageFromArray(self.ms_canvas[:, :, i])
-            img.SetSpacing((self.ms_spacing, self.ms_spacing))
+            img = sitk.GetImageFromArray(self.diffusion_canvas[:, :, i])
+            img.SetSpacing((self.mic_spacing, self.mic_spacing))
             self.pertubation_transform_maldi, pertubated_img = self.pertubate_img(img)
-            self.maldi_canvas[:, :, i] = sitk.GetArrayFromImage(pertubated_img)
+            pertubated_arr = sitk.GetArrayFromImage(pertubated_img)
+
+            if self.plot or self.save_img:
+                fig = plt.figure(figsize=(6,6))
+                plt.imshow(
+                    pertubated_arr,
+                    vmax=np.percentile(pertubated_arr, 99.),
+                    cmap='inferno'
+                )
+                plt.axis('off')
+                if self.save_img:
+                    fig.savefig(
+                        self.output + f"/pertubated_img_{i}.svg",
+                        bbox_inches='tight',
+                        pad_inches=0,
+                        dpi=600
+                    )
+
+            pertubated_maldi_img = skimage.measure.block_reduce(
+                pertubated_arr,
+                block_size=(int(ms_to_mic), int(ms_to_mic)),
+                func=np.sum
+            )
+
+            self.maldi_canvas[:, :, i] = pertubated_maldi_img
             if self.texture == 'all':
                 self.maldi_canvas[:, :, i] = self.multiply_texture(
                     self.maldi_canvas[:, :, i],
@@ -555,13 +589,60 @@ class Validator:
                     self.maldi_canvas[:, :, i],
                     self.texture_path
                 )
-
+        
+        maldi_sitk = sitk.GetImageFromArray(self.maldi_canvas[:, :, 0])
+        maldi_sitk.SetSpacing((self.ms_spacing, self.ms_spacing))
         maldi_img = self.maldi_canvas[:, :, 0]
         if self.texture == 'registration':
             maldi_img = self.multiply_texture(maldi_img, self.texture_path)
             maldi_img = self.add_texture(maldi_img, self.texture_path)
 
         if self.plot or self.save_img:
+
+            # --- Cell Coordinates on MSI Canvas ---
+            fig_coords, ax_coords = plt.subplots(figsize=(6, 6))
+            mgr = getattr(fig_coords.canvas, "manager", None)
+            if mgr is not None and hasattr(mgr, "set_window_title"):
+                mgr.set_window_title("Cell Coordinates on MSI Canvas")
+    
+            ax_coords.imshow(
+                self.maldi_canvas[:, :, 0],
+                vmax=np.percentile(self.maldi_canvas[:, :, 0], 99.0),
+                cmap="inferno",
+            )
+            ax_coords.axis("off")
+    
+            x_coords = [xy[0] for xy in self.msi_coordinates.values()]
+            y_coords = [xy[1] for xy in self.msi_coordinates.values()]
+            ax_coords.scatter(x_coords, y_coords, color="deepskyblue", s=10, marker="x")
+    
+            # --- Grid of MSI channels ---
+            grid_size = int(np.ceil(np.sqrt(len(self.mass_list))))
+            if grid_size > 5:
+                grid_size = 5  # limit grid size for better visibility
+    
+            fig_grid, axes = plt.subplots(grid_size, grid_size, figsize=(6, 6))
+            mgr = getattr(fig_grid.canvas, "manager", None)
+            if mgr is not None and hasattr(mgr, "set_window_title"):
+                mgr.set_window_title("MSI Canvas (m/z grid)")
+    
+            axes_flat = np.array(axes).reshape(-1)
+            max_panels = min(len(self.mass_list), grid_size * grid_size)
+    
+            for i, mz in enumerate(self.mass_list[:max_panels]):
+                ax_i = axes_flat[i]
+                ax_i.set_title(f"m/z {mz}")
+                ax_i.imshow(
+                    self.maldi_canvas[:, :, i],
+                    vmax=np.percentile(self.maldi_canvas[:, :, i], 99.0),
+                    cmap="inferno",
+                )
+                ax_i.axis("off")
+    
+            for j in range(max_panels, len(axes_flat)):
+                axes_flat[j].axis("off")
+
+
             fig = plt.figure(figsize=(6,6))
             plt.imshow(
                 maldi_img,
@@ -569,13 +650,28 @@ class Validator:
                 cmap='inferno'
             )
             plt.axis('off')
+
             if self.save_img:
+                fig_coords.savefig(
+                    self.output + "/msi_coordinates.svg",
+                    bbox_inches="tight",
+                    pad_inches=0,
+                    dpi=600,
+                )
+                fig_grid.savefig(
+                    self.output + "/msi_canvas.svg",
+                    bbox_inches="tight",
+                    pad_inches=0,
+                    dpi=600,
+                )
+                
                 fig.savefig(
                     self.output + "/pertubated_msi_canvas.svg",
                     bbox_inches='tight',
                     pad_inches=0,
                     dpi=600
                 )
+                
 
         # canvas_metrics["time"] was already set in generate_and_plot_canvases
         # continue with registration / segmentation / spectra as before...
@@ -613,12 +709,12 @@ class Validator:
         ]
         moving_landmarks = [
             [0.0, 0.0],
-            [0.0, len(self.ms_canvas) * self.ms_spacing],
-            [len(self.ms_canvas[0]) * self.ms_spacing, 0.0],
-            [len(self.ms_canvas[0]) * self.ms_spacing, len(self.ms_canvas) * self.ms_spacing],
+            [0.0, len(self.maldi_canvas) * self.ms_spacing],
+            [len(self.maldi_canvas[0]) * self.ms_spacing, 0.0],
+            [len(self.maldi_canvas[0]) * self.ms_spacing, len(self.maldi_canvas) * self.ms_spacing],
         ]
 
-        center = np.array(self.ms_canvas.shape[:2], dtype=float)/2
+        center = np.array(self.maldi_canvas.shape[:2], dtype=float)/2
 
         center = center * self.ms_spacing
         moving_pertubated_landmarks = self.pertubate_coordinates(moving_landmarks, center=center, inverse=True)
@@ -1047,13 +1143,13 @@ if __name__== "__main__":
 
     valid = Validator(
         use_perfect_segmentation=True, 
-        use_perfect_registration=True, 
-        remove_ambiguous=True,
+        use_perfect_registration=False, 
+        remove_ambiguous=False,
         seed=43,  
         scale=1.0, 
         teaching_imprecision=10, 
         rotation=0.2, 
-        ms_spacing=5,
+        ms_spacing=20,
         mic_spacing=0.6897, 
         plot=True, 
         save_img=False, 
