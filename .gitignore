@@ -10,7 +10,6 @@
 *.pyc
 __pycache__/
 *.pkl
-<<<<<<< HEAD
 *.xlsx
 *.csv
 *.jpg
@@ -23,20 +22,10 @@ __pycache__/
 *.tif
 *.tiff
 *.icache
-=======
-*.csv
-*.imzML
-*.ibd
-*.jpg
-*.png
-*.tif
-*.tiff
-*.icache
-*.slx
-*.sbd
-*.npy
->>>>>>> 22-improve-intracellular-signal-distribution
-
-**/*.quarto_ipynb
+/.vscode/
+*.yml
+*.sublime*
+*.sh
+*.qmd
+Calculate_Replicates.ipynb
 render_animation.py
-FISCAS_Validator.code-workspace
