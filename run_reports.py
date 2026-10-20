@@ -1,14 +1,21 @@
 import os
-import sys
-import shutil
 import datetime
-import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import random
+from FISCAS_Validator import Validator, CellType
+import numpy as np
+import copy
+import pandas as pd
+import glob
+import re
+import warnings
+warnings.filterwarnings("ignore")
+
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 os.chdir(base_dir)
 
-original_quarto_file = "Report.qmd"
+# Use a *relative* base for output (matches paths used inside the QMD)
 output_base_rel = "output"
 output_base = os.path.join(base_dir, output_base_rel)
 os.makedirs(output_base, exist_ok=True)
@@ -16,108 +23,195 @@ os.makedirs(output_base, exist_ok=True)
 output_dir = os.path.join(output_base, "reports")
 os.makedirs(output_dir, exist_ok=True)
 
+
+
 textures_base_rel = "textures"
 textures_dir = os.path.join(base_dir, textures_base_rel)
 noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
 noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg")
 
-commands = []
-i = 0
 
-<<<<<<< HEAD
+# Validator parameters
+output="./output/"
+use_perfect_registration=False
+use_perfect_segmentation=True
+teaching_imprecision=10
+canvas_size=1000
+mic_spacing=0.6897
+ms_spacing=5
+cell_density=0.2
+max_cell_placement_iterations=1000
+rotation=0
+scale=1.00
+mass_list=[1, 2, 3, 4]
+seed=42
+plot=False
+save_img=True
+remove_ambiguous=True
+cell_diameter=120
+texture=None
+texture_path=""
+texture_epsilon_add=0.13
+texture_epsilon_multiply=0.3
+diffusion_total_time=0.0
+diffusion_dt=1
+diffusion_coeff=[0.1,1,10,50]
+diffusion_barrier_alpha=[0.1,0.3,0.5,0.7]
+diffusion_leaky_outer_boundary=True
+
+params_best_case = {
+    "diffusion_total_time": 0,
+    "remove_ambiguous": False,
+    "rotation": 0,
+    "scale": 1.0,
+    "ms_spacing": 5,
+    "texture": None,
+    "texture_path": None,
+    "texture_epsilon_add": 0.0,
+    "texture_epsilon_multiply": 0.0,
+}
+
+params_real_case = {
+    "diffusion_total_time": 50,
+    "remove_ambiguous": False,
+    "rotation": 0.2,
+    "scale": 1.005,
+    "ms_spacing": 10,
+    "texture": "registration",
+    "texture_path": noise_texture,
+    "texture_epsilon_add": 0.13,
+    "texture_epsilon_multiply": 0.3,
+}
+
+params_worst_case = {
+    "diffusion_total_time": 100,
+    "remove_ambiguous": False,
+    "rotation": 5,
+    "scale": 1.05,
+    "ms_spacing": 20,
+    "texture": "registration",
+    "texture_path": noise_gradient_texture,
+    "texture_epsilon_add": 0.25,
+    "texture_epsilon_multiply": 0.5,
+}
+
+diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon_add, texture_epsilon_multiply = params_best_case.values()
 
 
-for j in range(1,6):
-=======
-for j in range(1,2):
->>>>>>> f7cf7599c8a3622b74cd621ab0bc0a58c6b3c764
-    for remove_ambiguous in [True, False]:
+validator_instances = []
+result_files = glob.glob(output_dir + "/*.csv")
+finished_seeds = []
+seeds = list(range(1,21))
+for file in result_files:
+    m = re.search(r'seed_(\d+)', file)
+    seed_num = int(m.group(1)) if m else None
+    if seed_num is not None:
+        finished_seeds.append(seed_num)
 
-        # Build parameter overrides as a list (no shell quoting issues)
-        param_overrides_best_case = [
-            "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:0",
-            "-P", f"remove_ambiguous:{remove_ambiguous}",
-            "-P", "rotation:0",
-            "-P", "scale:1.0",
-            "-P", "ms_spacing:5",
-            "-P", "texture:None",
-            "-P", f"texture_path:None",
-            "-P", "texture_epsilon_add:0",
-            "-P", "texture_epsilon_multiply:0",
-            "-P", f"seed:{j}",    
-        ]
+for k in finished_seeds:
+    if k in seeds:
+        seeds.remove(k)
 
-        param_overrides_real_case = [
-            "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:0",
-            "-P", f"remove_ambiguous:{remove_ambiguous}",
-            "-P", "rotation:0.2",
-            "-P", "scale:1.005",
-            "-P", "ms_spacing:8",
-            "-P", f"texture_path:{noise_texture}",
-            "-P", "texture_epsilon_add:0.13",
-            "-P", "texture_epsilon_multiply:0.3",
-            "-P", f"seed:{j}",
-        ]
+for j in seeds:
+    # set seed for all random number generators
+    seed = j
+    if seed == 0:
+        seed = random.randint(1, 10000)
+    random.seed(seed)
+    np.random.seed(seed)
 
-        param_overrides_worst_case = [
-            "-P", "allow_multiplets:True",
-            "-P", "diffusion_total_time:0",
-            "-P", f"remove_ambiguous:{remove_ambiguous}",
-            "-P", "rotation:5",
-            "-P", "scale:1.05",
-            "-P", "ms_spacing:20",
-            "-P", f"texture_path:{noise_gradient_texture}",
-            "-P", "texture_epsilon_add:0.3",
-            "-P", "texture_epsilon_multiply:0.6",
-            "-P", f"seed:{j}",
-        ]
+    # define cell populations
+    parameters_A = {"path" : "./Cell_Library/DLD-1",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 22, 5],
+                mass_list[2] : ["normal", 33, 3],
+                mass_list[3] : ["normal", 15, 5]
+                }
+    parameters_B = {"path" : "./Cell_Library/Colo205",
+                mass_list[0] : ["normal", 15, 5], 
+                mass_list[1] : ["normal", 10, 3],
+                mass_list[2] : ["normal", 40, 20],
+                mass_list[3] : ["normal", 0, 1]    
+                }
 
-        param_settings = [param_overrides_real_case, param_overrides_worst_case]
+    A = CellType("A", parameters_A, 0.5)
+    B = CellType("B", parameters_B, 0.5)
 
-        for param_override in param_settings:
-            # Make a unique copy of the QMD for this run (dynamic naming)
-            temp_qmd = f"Report_run_{i}.qmd"
-            shutil.copy(
-                os.path.join(base_dir, original_quarto_file),
-                os.path.join(base_dir, temp_qmd),
-            )
+    cell_types=[A,B]
 
-            # Per-run *relative* output dir: "output/run_i"
-            run_output_rel = os.path.join(output_base_rel, f"run_{i}")
-            run_output_abs = os.path.join(base_dir, run_output_rel)
-            os.makedirs(run_output_abs, exist_ok=True)
+    run_dir = os.path.join(output_base, f"run_{j}")
+    os.makedirs(run_dir, exist_ok=True)
 
-            param_override.append("-P")
-            param_override.append(f"output:{run_output_rel}")
-            output_file = f"Report_ms{i}.pdf"
 
-            cmd = [
-                "quarto", "render", temp_qmd,
-                *param_override,
-                "--output", output_file,
-                "--output-dir", output_dir,
-            ]
+    # Create validator object
+    A = Validator(
+        output=run_dir,
+        use_perfect_segmentation=use_perfect_segmentation, 
+        use_perfect_registration=use_perfect_registration, 
+        remove_ambiguous=remove_ambiguous,
+        seed=seed, 
+        scale=scale, 
+        teaching_imprecision=teaching_imprecision, 
+        rotation=rotation, 
+        ms_spacing=ms_spacing, 
+        plot=plot, 
+        save_img=save_img, 
+        canvas_size=canvas_size, 
+        cell_density=cell_density, 
+        mass_list=mass_list,
+        cell_types = cell_types,
+        diffusion_total_time=diffusion_total_time,
+        diffusion_dt=diffusion_dt,
+        diffusion_coeff=diffusion_coeff,
+        diffusion_barrier_alpha=diffusion_barrier_alpha,
+        diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary,
+        texture=texture,
+        texture_path=texture_path,
+        texture_epsilon_add=texture_epsilon_add,
+        texture_epsilon_multiply=texture_epsilon_multiply)
 
-            commands.append((i, cmd, temp_qmd))
-            i += 1
+    validator_instances.append(A)
+    
 
-def run_quarto(task):
-    idx, cmd, temp_qmd = task
-    print(f"[{datetime.datetime.now().time()}] Starting run {idx}")
-    env = os.environ.copy()
-    env["QUARTO_PYTHON"] = sys.executable
-    result = subprocess.run(cmd, cwd=base_dir, env=env)
-    base_name = os.path.splitext(temp_qmd)[0]
-    for ext in (".quarto_ipynb", ".ipynb"):
-        nb_path = os.path.join(base_dir, base_name + ext)
-        if os.path.exists(nb_path):
-            os.remove(nb_path)
-    if os.path.exists(os.path.join(base_dir, temp_qmd)):
-        os.remove(os.path.join(base_dir, temp_qmd))
 
-    return idx, result.returncode
+def run_validator(A):
+    print(f"[{datetime.datetime.now().time()}] Starting run {A.seed}")
+
+    try:
+        canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
+    except Exception as e:
+        print(f"[{datetime.datetime.now().time()}] Error in run {A.seed}: {e}")
+        return A.seed, 1
+
+    settings = A.return_settings()
+    seed = A.seed
+    setting_columns = list(settings.keys())
+    columns = copy.copy(setting_columns)
+    parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0", "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
+    for param in parameters:
+       columns.append(param)
+    df = pd.DataFrame(columns=columns)
+    values = []
+    for setting_value in settings.values():
+       values.append(setting_value)
+
+    for i in range(2):
+       values.append(float(registration_metrics['mre'][i]))
+       values.append(float(registration_metrics['mre_std'][i]))
+
+    for i in range(4):
+        values.append(float(spectra_metrics['spectra_mean_deviation'][i]))
+        values.append(np.sqrt(float(spectra_metrics['spectra_deviation_variance'][i])))
+
+    values.append(float(spectra_metrics['FPR']))
+    values.append(float(cluster_metrics['adjusted_rand_index']))
+    df = pd.concat([df, pd.DataFrame([values], columns=df.columns)], axis=0, ignore_index=True)
+
+    df.to_csv(output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
+
+    return A.seed, 0
+
+
 
 <<<<<<< HEAD
 # Save commands to a file for debugging or later use
@@ -134,11 +228,11 @@ slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
 if slurm_cpus:
     max_workers = max(1, int(slurm_cpus))
 else:
-    max_workers = 2
->>>>>>> f7cf7599c8a3622b74cd621ab0bc0a58c6b3c764
+    max_workers = 4
+
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-   futures = [executor.submit(run_quarto, task) for task in commands]
+   futures = [executor.submit(run_validator, A) for A in validator_instances]
    for f in as_completed(futures):
        idx, returncode = f.result()
        status = "OK" if returncode == 0 else f"FAILED ({returncode})"

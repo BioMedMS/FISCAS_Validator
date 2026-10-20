@@ -4,6 +4,7 @@ import glob
 import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import matplotlib
 from PIL import Image
 import random
 import skimage
@@ -25,6 +26,7 @@ from sklearn.decomposition import PCA
 from canvas_generation import generate_and_plot_canvases
 import uuid
 
+#matplotlib.use('Agg')
 
 SMALL_SIZE = 10
 MEDIUM_SIZE = 12
@@ -44,12 +46,11 @@ class Validator:
     def __init__(self,
         cell_types, # define cell populations with CellType objects,
         output="./output",
-        allow_multiplets=True, # allow placement of cell clusters
         use_perfect_registration=False, # skip registration by using the inverse of perturbation transform
         use_perfect_segmentation=True, # skip segmentation by using the ground truth masks
         teaching_imprecision=10,  # accuracy of landmark registration in µm
         canvas_size=2000,  # in µm
-        mic_spacing=0.325,  # pixel size of microscope canvas in µm 10X ~ 0.65; 20X ~ 0.325; 50X ~ 0.13
+        mic_spacing=0.6897,  # pixel size of microscope canvas in µm 10X ~ 0.65; 20X ~ 0.325; 50X ~ 0.13
         ms_spacing=1,  # pixel size of msi in µm
         cell_density=0.2,  # percentage of total canvas area
         max_cell_placement_iterations=1000, # max attempts to place cells on canvas
@@ -74,7 +75,6 @@ class Validator:
 
         self.cell_types = cell_types
         self.output = output
-        self.allow_multiplets = allow_multiplets
         self.use_perfect_registration = use_perfect_registration
         self.use_perfect_segmentation = use_perfect_segmentation
         self.teaching_imprecision = teaching_imprecision
@@ -117,6 +117,7 @@ class Validator:
         np.random.seed(self.seed)
 
         if self.plot or self.save_img:
+            plt.rcParams.update({'font.size': 30})
             n = len(self.mass_list)
             c = int(np.ceil(np.sqrt(n)))
             fig, ax = plt.subplots(c, c, figsize=(6,6)) 
@@ -154,7 +155,6 @@ class Validator:
             "ID": uuid.uuid4(),
             "cell_types": cell_types,
             "output": self.output,
-            "allow_multiplets": self.allow_multiplets,
             "use_perfect_registration": self.use_perfect_registration,
             "use_perfect_segmentation": self.use_perfect_segmentation,
             "teaching_imprecision": self.teaching_imprecision,
@@ -189,45 +189,36 @@ class Validator:
     def load_random_cell(self, cell_directory, mask_index=255, seed=None):
         all_images = glob.glob(os.path.join(cell_directory, '**', '*.*'), recursive=True)
         images = sorted([
-            file for file in all_images if 'cell' in os.path.basename(file) and 'mask' not in os.path.basename(file)])
+            file for file in all_images if 'cell' in os.path.basename(file) and 'seg' not in os.path.basename(file)])
         masks = sorted([
-            file for file in all_images if 'mask' in os.path.basename(file)])
+            file for file in all_images if 'seg' in os.path.basename(file)])
         if seed is None:
             angle = random.randint(0, 360)
             scaling_factor = random.uniform(0.8, 1.2)
-            while True:
-                cell_chosen = random.randint(0, len(images)-1)
-                #check if there is more than one cell on the chosen image
-                is_multiplet = "doublet" in masks[cell_chosen] or "triplet" in masks[cell_chosen] or "multiplet" in masks[cell_chosen]
-                if is_multiplet and not self.allow_multiplets:
-                    continue  # Retry if the cell is a multiplet and multiplets are not allowed
-                else:
-                    break
+            cell_chosen = random.randint(0, len(images)-1)
         else:
             angle = 0
             scaling_factor = 1
             cell_chosen = seed
         cell_mask = np.array(Image.open(masks[cell_chosen]), dtype=np.uint16) # open corresponding cell mask
-        if is_multiplet: # if cell image contains multiple cells, reindex mask ids to match the current running number already placed on canvas
-            mask_ids = np.unique(cell_mask)
-            for mask_id in mask_ids:
-                if mask_id != 0:
-                    cell_mask[cell_mask == mask_id] = mask_index
-                    mask_index += 1
-            mask_index -= 1
-        else:
-            cell_mask[cell_mask > 0] = mask_index
+        mask_ids = np.unique(cell_mask)
+        for mask_id in mask_ids:
+            if mask_id != 0:
+                cell_mask[cell_mask == mask_id] = mask_index
+                mask_index += 1
+        mask_index -= 1
         current_mask_index = mask_index
-        with Image.open(images[cell_chosen]) as img: 
-            cell_image = np.zeros((img.size[1], img.size[0], img.n_frames))
-            for i in range(img.n_frames):
-                img.seek(i)
-                cell_image[:, :, i] = skimage.exposure.equalize_adapthist(np.array(img))
+        #with Image.open(images[cell_chosen]) as img: 
+        #    cell_image = np.zeros((img.size[1], img.size[0], img.n_frames))
+        #    for i in range(img.n_frames):
+        #       img.seek(i)
+        #       cell_image[:, :, i] = np.array(img)
+        #       cell_image[:, :, i] = skimage.exposure.equalize_adapthist(np.array(img))
+        cell_image = skimage.io.imread(images[cell_chosen])
         cell_rotated = skimage.transform.rotate(cell_image, angle, resize=True)
         mask_rotated = skimage.transform.rotate(np.array(cell_mask), angle, order=0, resize=True)
-        cell_scaled = skimage.transform.rescale(cell_rotated, scaling_factor, anti_aliasing=True)
+        cell_scaled = skimage.transform.rescale(cell_rotated, scaling_factor, anti_aliasing=True, channel_axis=-1)
         mask_scaled = skimage.transform.rescale(mask_rotated, scaling_factor, order=0, anti_aliasing=False)
-        cell_scaled[mask_scaled == 0] = 0
         return cell_scaled, mask_scaled.astype(np.uint16), current_mask_index
 
 
@@ -247,7 +238,7 @@ class Validator:
         cell = cell_type
         for i in range(len(self.mass_list)):
             factor = cell.get_intensity(self.mass_list[i])
-            rescaled_intensities = intensities / np.sum(intensities) * factor
+            rescaled_intensities = intensities * factor
             intensities_all_mz[:,:, i] = rescaled_intensities
         return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
 
@@ -421,12 +412,12 @@ class Validator:
             error.append(landmark_fixed - landmark_moving)
         error = np.array(error)
         if self.plot or self.save_img:
-            fig, ax = plt.subplots(figsize=(6,6))
-            radii = [1,3,5,7,10]
+            fig, ax = plt.subplots(figsize=(2.5,2.5))
+            radii = [5,10,15,20]
             for radius in radii:
-                circle = plt.Circle((0, 0), radius, color='grey', fill=False, linestyle='-', linewidth=0.5)
+                circle = plt.Circle((0, 0), radius, color='grey', fill=False, linestyle='-', linewidth=1)
                 ax.add_artist(circle)
-                ax.text(0, -radius, str(radius), fontsize=12, ha='center', va='center', color='grey',
+                ax.text(0, -radius, str(radius), fontsize=10, ha='center', va='center', color='grey',
                     bbox=dict(facecolor='white', edgecolor='none', boxstyle='round,pad=0.2'))
             ax.set_aspect('equal', 'box')
             limit = max(radii) + 1
@@ -435,8 +426,8 @@ class Validator:
             #ax.set_xlabel('Error X in µm')
             #ax.set_ylabel('Error Y in µm')
             #ax.set_title('Registration Error Plot')
-            ax.scatter(0,0, color='grey', s=150, marker='+')
-            ax.scatter(error[:,0], error[:,1], color='blue', s=70, marker='.', zorder=10)
+            ax.scatter(0,0, color='grey', s=200, marker='+')
+            ax.scatter(error[:,0], error[:,1], color='blue', s=30, marker='.', zorder=10, alpha=0.5)
             plt.axis('off')
             if self.save_img:
                 plt.savefig(self.output + "/Registration_error_plot.svg", bbox_inches='tight', pad_inches=0, dpi=600)
@@ -544,17 +535,51 @@ class Validator:
     def main(self):
         # create & plot canvases in separate module
         generate_and_plot_canvases(self)
+        ms_to_mic = self.ms_spacing / self.mic_spacing
+
+        print(self.diffusion_canvas[:,:,0].shape)
+        print(type(self.diffusion_canvas[:,:,0]))
+        print(self.diffusion_canvas[:,:,0].dtype)
+
 
         #print("perform pertubations...")
-        self.maldi_canvas = np.zeros(self.ms_canvas.shape)
-        maldi_sitk = sitk.GetImageFromArray(self.ms_canvas[:, :, 0])
-        maldi_sitk.SetSpacing((self.ms_spacing, self.ms_spacing))
+        img = skimage.measure.block_reduce(
+            self.diffusion_canvas[:,:,0],
+            block_size=(int(ms_to_mic), int(ms_to_mic)),
+            func=np.sum
+        )
+        self.maldi_canvas = np.zeros((img.shape[0], img.shape[1], len(self.mass_list)))
 
+        
         for i in range(len(self.mass_list)):
-            img = sitk.GetImageFromArray(self.ms_canvas[:, :, i])
-            img.SetSpacing((self.ms_spacing, self.ms_spacing))
+            img = sitk.GetImageFromArray(self.diffusion_canvas[:, :, i])
+            img.SetSpacing((self.mic_spacing, self.mic_spacing))
             self.pertubation_transform_maldi, pertubated_img = self.pertubate_img(img)
-            self.maldi_canvas[:, :, i] = sitk.GetArrayFromImage(pertubated_img)
+            pertubated_arr = sitk.GetArrayFromImage(pertubated_img)
+
+            if self.plot or self.save_img:
+                fig = plt.figure(figsize=(6,6))
+                plt.imshow(
+                    pertubated_arr,
+                    vmax=np.percentile(pertubated_arr, 99.),
+                    cmap='inferno'
+                )
+                plt.axis('off')
+                if self.save_img:
+                    fig.savefig(
+                        self.output + f"/pertubated_img_{i}.svg",
+                        bbox_inches='tight',
+                        pad_inches=0,
+                        dpi=600
+                    )
+
+            pertubated_maldi_img = skimage.measure.block_reduce(
+                pertubated_arr,
+                block_size=(int(ms_to_mic), int(ms_to_mic)),
+                func=np.sum
+            )
+
+            self.maldi_canvas[:, :, i] = pertubated_maldi_img
             if self.texture == 'all':
                 self.maldi_canvas[:, :, i] = self.multiply_texture(
                     self.maldi_canvas[:, :, i],
@@ -564,13 +589,60 @@ class Validator:
                     self.maldi_canvas[:, :, i],
                     self.texture_path
                 )
-
+        
+        maldi_sitk = sitk.GetImageFromArray(self.maldi_canvas[:, :, 0])
+        maldi_sitk.SetSpacing((self.ms_spacing, self.ms_spacing))
         maldi_img = self.maldi_canvas[:, :, 0]
         if self.texture == 'registration':
             maldi_img = self.multiply_texture(maldi_img, self.texture_path)
             maldi_img = self.add_texture(maldi_img, self.texture_path)
 
         if self.plot or self.save_img:
+
+            # --- Cell Coordinates on MSI Canvas ---
+            fig_coords, ax_coords = plt.subplots(figsize=(6, 6))
+            mgr = getattr(fig_coords.canvas, "manager", None)
+            if mgr is not None and hasattr(mgr, "set_window_title"):
+                mgr.set_window_title("Cell Coordinates on MSI Canvas")
+    
+            ax_coords.imshow(
+                self.maldi_canvas[:, :, 0],
+                vmax=np.percentile(self.maldi_canvas[:, :, 0], 99.0),
+                cmap="inferno",
+            )
+            ax_coords.axis("off")
+    
+            x_coords = [xy[0] for xy in self.msi_coordinates.values()]
+            y_coords = [xy[1] for xy in self.msi_coordinates.values()]
+            ax_coords.scatter(x_coords, y_coords, color="deepskyblue", s=10, marker="x")
+    
+            # --- Grid of MSI channels ---
+            grid_size = int(np.ceil(np.sqrt(len(self.mass_list))))
+            if grid_size > 5:
+                grid_size = 5  # limit grid size for better visibility
+    
+            fig_grid, axes = plt.subplots(grid_size, grid_size, figsize=(6, 6))
+            mgr = getattr(fig_grid.canvas, "manager", None)
+            if mgr is not None and hasattr(mgr, "set_window_title"):
+                mgr.set_window_title("MSI Canvas (m/z grid)")
+    
+            axes_flat = np.array(axes).reshape(-1)
+            max_panels = min(len(self.mass_list), grid_size * grid_size)
+    
+            for i, mz in enumerate(self.mass_list[:max_panels]):
+                ax_i = axes_flat[i]
+                ax_i.set_title(f"m/z {mz}")
+                ax_i.imshow(
+                    self.maldi_canvas[:, :, i],
+                    vmax=np.percentile(self.maldi_canvas[:, :, i], 99.0),
+                    cmap="inferno",
+                )
+                ax_i.axis("off")
+    
+            for j in range(max_panels, len(axes_flat)):
+                axes_flat[j].axis("off")
+
+
             fig = plt.figure(figsize=(6,6))
             plt.imshow(
                 maldi_img,
@@ -578,13 +650,28 @@ class Validator:
                 cmap='inferno'
             )
             plt.axis('off')
+
             if self.save_img:
+                fig_coords.savefig(
+                    self.output + "/msi_coordinates.svg",
+                    bbox_inches="tight",
+                    pad_inches=0,
+                    dpi=600,
+                )
+                fig_grid.savefig(
+                    self.output + "/msi_canvas.svg",
+                    bbox_inches="tight",
+                    pad_inches=0,
+                    dpi=600,
+                )
+                
                 fig.savefig(
                     self.output + "/pertubated_msi_canvas.svg",
                     bbox_inches='tight',
                     pad_inches=0,
                     dpi=600
                 )
+                
 
         # canvas_metrics["time"] was already set in generate_and_plot_canvases
         # continue with registration / segmentation / spectra as before...
@@ -622,12 +709,12 @@ class Validator:
         ]
         moving_landmarks = [
             [0.0, 0.0],
-            [0.0, len(self.ms_canvas) * self.ms_spacing],
-            [len(self.ms_canvas[0]) * self.ms_spacing, 0.0],
-            [len(self.ms_canvas[0]) * self.ms_spacing, len(self.ms_canvas) * self.ms_spacing],
+            [0.0, len(self.maldi_canvas) * self.ms_spacing],
+            [len(self.maldi_canvas[0]) * self.ms_spacing, 0.0],
+            [len(self.maldi_canvas[0]) * self.ms_spacing, len(self.maldi_canvas) * self.ms_spacing],
         ]
 
-        center = np.array(self.ms_canvas.shape[:2], dtype=float)/2
+        center = np.array(self.maldi_canvas.shape[:2], dtype=float)/2
 
         center = center * self.ms_spacing
         moving_pertubated_landmarks = self.pertubate_coordinates(moving_landmarks, center=center, inverse=True)
@@ -869,6 +956,10 @@ class Validator:
             f_histograms, axes = plt.subplots(grid_size, grid_size, figsize=(6,4))
             axes = axes.flatten()
 
+        self.measured_intensities = {}
+        for key, _ in self.msi_coordinates.items():
+            self.measured_intensities[key] = np.zeros(len(self.mass_list))
+
         for i in range(len(self.mass_list)):
             spectra_comparison = []
             for key, value in self.msi_coordinates.items():
@@ -890,44 +981,54 @@ class Validator:
                     #print(f"at mz {mass_list[i]} cell {key} assigned to mask {mask_id}, true intensity: {self.cell_intensities[key][i]}, measured intensity: {cells[mask_id][i]}")
                     true_int = self.cell_intensities[key][i]
                     meas_int = cells[mask_id][i]
+                    self.measured_intensities[key][i] = copy.copy(meas_int)
                     
-                    if true_int != 0:
-                        spectra_comparison.append((meas_int-true_int)/true_int)
-                    else:
-                        deviation[mask_id][i] = meas_int
-                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #if true_int != 0:
+                    spectra_comparison.append((meas_int-true_int)/(true_int+meas_int))
+                    #else:
+                    #    deviation[mask_id][i] = meas_int
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
                 else:
                     mask_id = 0
                     canvas_to_mask[key] = mask_id
                     true_int = self.cell_intensities[key][i]
+            
                     meas_int = 0
+                    self.measured_intensities[key][i] = copy.copy(meas_int)
                     cells_missed += 1
-                    if true_int != 0:
-                        spectra_comparison.append((meas_int-true_int)/true_int)
-                    else:
-                        deviation[mask_id][i] = meas_int
-                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/true_int:.2%}")
+                    #if true_int != 0:
+                    spectra_comparison.append((meas_int-true_int)/(true_int+meas_int))
+                    #else:
+                    #    deviation[mask_id][i] = meas_int
+                    #print(f"cell: ({key},{mask_id}), x/y:({x}/{y}) ({x_msi}/{y_msi}), ground truth: {true_int}, measured: {meas_int}, difference: {true_int-meas_int}, relative difference: {(true_int-meas_int)/(true_int+meas_int):.2%}")
                 
             
-            spectra_comparison = np.array(spectra_comparison) * 100
+            spectra_comparison = np.array(spectra_comparison)
             spectra_comparison = spectra_comparison[~np.isnan(spectra_comparison) & ~np.isinf(spectra_comparison)]
+            np.save(self.output + f"/spectra_comparison_{i}.npy", spectra_comparison)   
             if self.plot or self.save_img:
                 if i < 25:
-                    axes[i].hist(spectra_comparison, bins=100)
+                    axes[i].hist(spectra_comparison, bins=100, range=(-1,1))
                     axes[i].set_title(f"m/z {self.mass_list[i]}")
-            spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison[spectra_comparison!=100])))
-            spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison[spectra_comparison!=100]),2))
-            cells_missed_all_mz.append(np.sum(spectra_comparison==100))
+                    axes[i].set_xlim([-1, 1])
+            spectra_metrics_all_mz_mean.append(np.mean(np.abs(spectra_comparison)))
+            spectra_metrics_all_mz_var.append(pow(np.std(spectra_comparison),2))
+            cells_missed_all_mz.append(np.sum(spectra_comparison==-1))
         if self.save_img:
             f_histograms.savefig(self.output + "/spectra_hist.svg", bbox_inches='tight', pad_inches=0, dpi=600)
-        spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
-        np.save(self.output + "/true_spectra.npy", spectra)
-        standardized_spectra = StandardScaler().fit_transform(spectra)
+        true_spectra = np.asarray(list(self.cell_intensities.values()), dtype=np.float32)
+        measured_spectra = np.asarray(list(self.measured_intensities.values()))
+        np.save(self.output + "/true_spectra.npy", true_spectra)
+        np.save(self.output + "/measured_spectra.npy", measured_spectra)
+        measured_spectra_sum = np.sum(measured_spectra, axis=1, keepdims=True)
+        mask = measured_spectra_sum != 0
+        mask = mask[:,0]
+        standardized_spectra = StandardScaler().fit_transform(measured_spectra[mask, :]/measured_spectra_sum[mask])
         np.save(self.output + "/standardized_spectra.npy", standardized_spectra)
         np.save(self.output + "/cell_labels.npy", np.array(list(self.cell_labels.values())))
         kmeans = KMeans(n_clusters=len(self.cell_types), random_state=self.seed)
         predicted_labels = kmeans.fit_predict(standardized_spectra)
-        true_labels = np.array(list(self.cell_labels.values()))
+        true_labels = np.array(list(self.cell_labels.values()))[mask]
         adjusted_rand = adjusted_rand_score(true_labels, predicted_labels)
         cont_matrix = contingency_matrix(true_labels, predicted_labels)
         self.cluster_metrics["contingency_matrix"] = cont_matrix
@@ -1023,45 +1124,44 @@ class CellType:
         return self.parameters["path"]
 
 if __name__== "__main__":
-    mass_list = [744.55,760.58,369.35,958.78]
-    parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+    mass_list = [1,2,3,4]
+    parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 15, 3],
-                mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 10, 15]
+                mass_list[1] : ["normal", 22, 5],
+                mass_list[2] : ["normal", 9, 5],
+                mass_list[3] : ["normal", 15, 5]
                 }
-    parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+    parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 22, 3],
-                mass_list[2] : ["uniform", 0, 0],
-                mass_list[3] : ["normal", 22, 3]
+                mass_list[1] : ["normal", 10, 3],
+                mass_list[2] : ["normal", 40, 15],
+                mass_list[3] : ["normal", 0, 1]    
                 }
 
-    A = CellType("A", parameters_A, 0.5)
-    B = CellType("B", parameters_B, 0.5)
+    A = CellType("A", parameters_A, 0.6)
+    B = CellType("B", parameters_B, 0.4)
 
     valid = Validator(
         use_perfect_segmentation=True, 
         use_perfect_registration=False, 
-        allow_multiplets=True,
         remove_ambiguous=False,
-        seed=1, 
+        seed=43,  
         scale=1.0, 
         teaching_imprecision=10, 
-        rotation=0, 
-        ms_spacing=5,
-        mic_spacing=0.325, 
+        rotation=0.2, 
+        ms_spacing=20,
+        mic_spacing=0.6897, 
         plot=True, 
         save_img=False, 
         canvas_size=1000, 
         cell_density=0.2, 
         mass_list=mass_list,
-        cell_types = [A, B],
+        cell_types = [A,B],
         render_animation=False,
         diffusion_total_time=0.0,
         diffusion_dt=1,
-        diffusion_coeff=[0.1,1,50,10],
-        diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
+        diffusion_coeff=[0.54,6.54,9.92,23.57],
+        diffusion_barrier_alpha=[0.047,0.059,0.061,0.145],
         diffusion_leaky_outer_boundary=True,
         texture=None,
         texture_path="./textures/noise_gradient_150x150.jpg",

@@ -2,9 +2,12 @@
 title: Validator Report
 echo: False
 toc: False
+execute:
+    python: ".venv/bin/python"
+    external: True
 
 format:
-  pdf: default
+  html: default
 
 ---
 ```{python}
@@ -29,7 +32,6 @@ def convert_to_float_and_round(value, decimal=4):
 ```{python}
 #| tags: [parameters]
 output="./output/"
-allow_multiplets=True
 use_perfect_registration=False
 use_perfect_segmentation=True
 teaching_imprecision=10
@@ -44,9 +46,9 @@ mass_list=[1, 2, 3, 4]
 seed=1
 plot=True
 save_img=True
-remove_ambiguous=True
+remove_ambiguous=False
 cell_diameter=120
-texture="registration"
+texture='registration'
 texture_path="./textures/noise_150x150.jpg"
 <<<<<<< HEAD
 texture_epsilon=0.1
@@ -57,8 +59,8 @@ texture_epsilon_multiply=0.3
 diffusion_total_time=00.0
 >>>>>>> 22-improve-intracellular-signal-distribution
 diffusion_dt=1
-diffusion_coeff=[0.1,1,50,10]
-diffusion_barrier_alpha=[0.1,0.3,0.7,0.5]
+diffusion_coeff=[0.54,6.54,9.92,23.57]
+diffusion_barrier_alpha=[0.047,0.059,0.061,0.145]
 diffusion_leaky_outer_boundary=True
 ```
 
@@ -68,21 +70,21 @@ if seed == 0:
     seed = random.randint(1, 10000)
 random.seed(seed)
 np.random.seed(seed)
-parameters_A = {"path" : "./Cell_images/microscopy/HuTu80",
+parameters_A = {"path" : "./Cell_Library/DLD-1",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 15, 3],
-                mass_list[2] : ["normal", 15, 3],
-                mass_list[3] : ["normal", 10, 15]
+                mass_list[1] : ["normal", 22, 5],
+                mass_list[2] : ["normal", 33, 3],
+                mass_list[3] : ["normal", 15, 5]
                 }
-parameters_B = {"path" : "./Cell_images/microscopy/THP-1",
+parameters_B = {"path" : "./Cell_Library/Colo205",
                 mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 22, 3],
-                mass_list[2] : ["uniform", 0, 0],
-                mass_list[3] : ["normal", 22, 3]
+                mass_list[1] : ["normal", 10, 3],
+                mass_list[2] : ["normal", 40, 20],
+                mass_list[3] : ["normal", 0, 1]    
                 }
 
-A = CellType("A", parameters_A, 0.5)
-B = CellType("B", parameters_B, 0.5)
+A = CellType("A", parameters_A, 0.6)
+B = CellType("B", parameters_B, 0.4)
 
 cell_types=[A,B]
 
@@ -90,7 +92,6 @@ A = Validator(
     output=output,
     use_perfect_segmentation=use_perfect_segmentation, 
     use_perfect_registration=use_perfect_registration, 
-    allow_multiplets=allow_multiplets,
     remove_ambiguous=remove_ambiguous,
     seed=seed, 
     scale=scale, 
@@ -110,6 +111,8 @@ A = Validator(
     diffusion_leaky_outer_boundary=diffusion_leaky_outer_boundary,
     texture=texture,
     texture_path=texture_path,
+    texture_epsilon_add=texture_epsilon_add,
+    texture_epsilon_multiply=texture_epsilon_multiply)
     texture_epsilon_add=texture_epsilon_add,
     texture_epsilon_multiply=texture_epsilon_multiply)
 
