@@ -1,4 +1,6 @@
 /Cell_images
+/Cell_Sampling/*
+/Cell_Library/
 
 /.quarto/
 /output
@@ -29,3 +31,4 @@ __pycache__/
 *.qmd
 Calculate_Replicates.ipynb
 render_animation.py
+
