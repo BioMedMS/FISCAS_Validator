@@ -86,7 +86,7 @@ def diffuse_mask_batched(
     diffusion_coeff=1.0,     # can be scalar or (B,)
     barrier_alpha=0.1,       # can be scalar or (B,)
     leaky_outer_boundary=True,
-):
+    ):
     """
     Pixel-based diffusion with barriers on label boundaries.
 

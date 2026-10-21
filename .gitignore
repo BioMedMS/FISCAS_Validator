@@ -4,14 +4,25 @@
 
 /.quarto/
 /output
+/input
+/Data_Quality_Analyzer/input
 /reports
 /textures
+Data_Quality_Analyzer/input
 *test*.py
 *test*.ipynb
 *test*.qmd
 *.pyc
 __pycache__/
 *.pkl
+*.imzML
+*.ibd
+*.sbd
+*.slx
+*.tif
+*.jpg
+*.png
+*.csv
 *.xlsx
 *.csv
 *.jpg
@@ -31,4 +42,5 @@ __pycache__/
 *.qmd
 Calculate_Replicates.ipynb
 render_animation.py
+
 
