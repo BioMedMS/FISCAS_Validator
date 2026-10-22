@@ -211,9 +211,6 @@ def run_validator(A):
 
     return A.seed, 0
 
-
-
-<<<<<<< HEAD
 # Save commands to a file for debugging or later use
 commands_file = os.path.join(output_base, "commands.txt")
 with open(commands_file, "w") as f:
@@ -223,7 +220,6 @@ with open(commands_file, "w") as f:
         f.write("\n")
 max_workers = 4#os.cpu_count()
 
-=======
 slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
 if slurm_cpus:
     max_workers = max(1, int(slurm_cpus))
