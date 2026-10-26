@@ -23,7 +23,7 @@ from scipy.optimize import linear_sum_assignment
 from scipy.ndimage import distance_transform_edt
 import pickle 
 from sklearn.decomposition import PCA
-from canvas_generation import generate_and_plot_canvases
+from canvas_generation import generate_and_plot_canvases, sample_maldi_cell
 import uuid
 
 #matplotlib.use('Agg')
@@ -71,7 +71,12 @@ class Validator:
         diffusion_dt=1,
         diffusion_coeff=[0.1,1,50,10],
         diffusion_barrier_alpha=[0.1,0.3,0.7,0.5],
-        diffusion_leaky_outer_boundary=True):  
+        diffusion_leaky_outer_boundary=True,
+        computation_backend="cpu"):
+
+        if computation_backend not in ("auto", "gpu", "cpu"):
+            raise ValueError("computation_backend must be auto, gpu or cpu")
+        self.computation_backend = computation_backend
 
         self.cell_types = cell_types
         self.output = output
@@ -179,7 +184,8 @@ class Validator:
             "diffusion_dt": self.diffusion_dt,
             "diffusion_coeff": self.diffusion_coeff,
             "diffusion_barrier_alpha": self.diffusion_barrier_alpha,
-            "diffusion_leaky_outer_boundary": self.diffusion_leaky_outer_boundary  
+            "diffusion_leaky_outer_boundary": self.diffusion_leaky_outer_boundary,
+            "computation_backend": self.computation_backend,
         }
         return settings
 
@@ -226,21 +232,9 @@ class Validator:
 
     # generate MALDI signal distribution for a given cell mask
     def generate_maldi_cell(self, cell_type, mask, sigma=4.0):
-        mask = copy.deepcopy(mask)
-        
-        intensities_all_mz = np.zeros((len(mask), len(mask[0]), len(self.mass_list)))
-        mask = mask.astype(bool)
-        dist_to_boundary = distance_transform_edt(mask)
-        dist_to_boundary[~mask] = np.nan
-        d_max = np.nanmax(dist_to_boundary)          # größter Abstand = „Mitte“ der Form
-        gradient_linear = dist_to_boundary / d_max + 0.1
-        intensities = np.nan_to_num(gradient_linear)
-        cell = cell_type
-        for i in range(len(self.mass_list)):
-            factor = cell.get_intensity(self.mass_list[i])
-            rescaled_intensities = intensities * factor
-            intensities_all_mz[:,:, i] = rescaled_intensities
-        return intensities_all_mz, np.sum(intensities_all_mz, axis=(0,1))
+        return sample_maldi_cell(
+            mask, [cell_type.get_intensity(mass) for mass in self.mass_list]
+        )
 
     # calculate the density of cells on the mask canvas
     def calculate_cell_density(self):

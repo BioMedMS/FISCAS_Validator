@@ -1,10 +1,199 @@
+"""Cell-signal generation, diffusion, scene placement and rendering."""
 import numpy as np
 import random
 import time
 import matplotlib.pyplot as plt
 import skimage
+from scipy.ndimage import distance_transform_edt, find_objects
 
-from diffusion import diffuse_mask_batched
+
+def cell_profile(mask):
+    """Distance-transform cell profile with a 0.1 intensity offset."""
+    binary = np.asarray(mask, dtype=bool)
+    if binary.ndim != 2:
+        raise ValueError("Cell mask must be 2D")
+    if not binary.any():
+        return np.zeros(binary.shape, dtype=float)
+    distance = distance_transform_edt(binary)
+    distance[~binary] = np.nan
+    return np.nan_to_num(distance / np.nanmax(distance) + 0.1)
+
+
+def sample_maldi_cell(mask, intensity_factors):
+    factors = np.asarray(intensity_factors, dtype=float)
+    if factors.ndim != 1 or not np.isfinite(factors).all():
+        raise ValueError("Provide one finite intensity factor per channel")
+    field = cell_profile(mask)[..., None] * factors
+    return field, field.sum(axis=(0, 1))
+
+
+def _cells(mask):
+    mask = np.asarray(mask)
+    if mask.ndim != 2 or not mask.size or not np.issubdtype(mask.dtype, np.integer) or np.any(mask < 0):
+        raise ValueError("mask must be a nonnegative 2D integer label array")
+    ids = np.unique(mask)
+    return mask, ids[ids > 0]
+
+
+def _unit_cells(mask):
+    """Yield cell IDs, bounding boxes, unit profiles and profile totals."""
+    mask, ids = _cells(mask)
+    # Compute bounding boxes in one pass; compact sparse labels for the lookup.
+    if len(ids) and int(ids[-1]) > max(10_000, 10 * len(ids)):
+        labels = np.searchsorted(np.r_[0, ids], mask)
+        boxes = find_objects(labels)
+        cell_boxes = [boxes[i] for i in range(len(ids))]
+    else:
+        boxes = find_objects(mask)
+        cell_boxes = [boxes[int(cell_id)-1] for cell_id in ids]
+    for cell_id, box in zip(ids, cell_boxes):
+        top, bottom = box[0].start, box[0].stop
+        left, right = box[1].start, box[1].stop
+        # Include a one-pixel background halo, clipped to the canvas.
+        y0, y1 = max(0, top - 1), min(mask.shape[0], bottom + 1)
+        x0, x1 = max(0, left - 1), min(mask.shape[1], right + 1)
+        binary = mask[y0:y1, x0:x1] == cell_id
+        field = cell_profile(binary)
+        unit = field[top-y0:bottom-y0, left-x0:right-x0]
+        yield int(cell_id), (top, bottom, left, right), unit, float(field.sum())
+
+
+def simulator_intensity_factors(mask, intensities):
+    """Convert channel-by-cell totals to distance-profile multipliers."""
+    _, ids = _cells(mask)
+    totals = np.asarray(intensities, dtype=float)
+    if totals.ndim != 2 or totals.shape[1] != len(ids):
+        raise ValueError("intensities must have shape (channels, number_of_cells)")
+    weights = np.asarray([weight for _, _, _, weight in _unit_cells(mask)])
+    return totals / weights[None, :]
+
+
+def render_simulator_source(mask, intensities, intensity_mode="total"):
+    """Render one channel with per-cell totals or distance-profile multipliers.
+
+    intensity_mode='total' normalizes each profile to the supplied cell total.
+    intensity_mode='factor' multiplies each profile by the supplied factor.
+    """
+    mask, ids = _cells(mask)
+    values = np.asarray(intensities, dtype=float)
+    if values.shape != (len(ids),) or not np.isfinite(values).all() or np.any(values < 0):
+        raise ValueError("provide one finite nonnegative intensity per positive mask ID")
+    if intensity_mode not in ("total", "factor"):
+        raise ValueError("intensity_mode must be 'total' or 'factor'")
+    source = np.zeros(mask.shape, dtype=float)
+    for value, (_, (top, bottom, left, right), unit, total) in zip(values, _unit_cells(mask)):
+        factor = value / total if intensity_mode == "total" else value
+        source[top:bottom, left:right] += unit * factor
+    return source
+
+
+class CPUForward:
+    """CPU backend for label-weighted implicit Euler diffusion."""
+    def __init__(self, mask, rtol):
+        from Data_Quality_Analyzer.simulator_iterative import diffuse_mask_iterative
+        self.mask, self.rtol = mask, rtol
+        self._diffuse = diffuse_mask_iterative
+
+    def source(self, field):
+        return np.asarray(field, dtype=float)
+
+    def diffuse(self, source, coefficient, alpha, time, dt, leaky=True,
+                callback=None, return_device=False):
+        return self._diffuse(self.mask, source, time, dt, coefficient,
+            alpha, leaky, self.rtol, maxiter=self.mask.size, callback=callback)
+
+    def msi(self, source, d, alpha, total_time, dt, scale, leaky=True, callback=None):
+        return sum_pool(self.diffuse(source, d, alpha, total_time, dt, leaky,
+                                     callback), scale)
+
+
+def sum_pool(field, scale):
+    if int(scale) != scale or scale < 1:
+        raise ValueError("scaling_factor must be a positive integer")
+    scale = int(scale)
+    h, w = field.shape
+    if h % scale or w % scale:
+        field = np.pad(field, ((0, (-h) % scale), (0, (-w) % scale)))
+    return field.reshape(field.shape[0]//scale, scale,
+                         field.shape[1]//scale, scale).sum(axis=(1, 3))
+
+
+class CanvasGenerator:
+    """Generate cell signals and MALDI images on the CPU or GPU.
+
+    Intensities are channel-by-cell, ordered by ascending positive label ID.
+    """
+    def __init__(self, cell_mask, backend="auto", rtol=1e-8):
+        self.mask, self.cell_ids = _cells(cell_mask)
+        if not 0 < rtol < 1 or not np.isfinite(rtol):
+            raise ValueError("rtol must lie between zero and one")
+        if backend not in ("auto", "gpu", "cpu"):
+            raise ValueError("backend must be auto, gpu or cpu")
+        self.rtol = float(rtol)
+        if backend in ("auto", "gpu"):
+            try:
+                from Data_Quality_Analyzer.simulator_gpu import GPUSimulator
+                # Compact arbitrary IDs before transferring to the int32 GPU mask.
+                labels = np.searchsorted(np.r_[0, self.cell_ids], self.mask).astype(np.int32)
+                self.forward = GPUSimulator(labels, self.rtol)
+                self.backend = "gpu"
+            except (ImportError, RuntimeError):
+                if backend == "gpu":
+                    raise
+                self.forward = CPUForward(self.mask, self.rtol)
+                self.backend = "cpu"
+        else:
+            self.forward = CPUForward(self.mask, self.rtol)
+            self.backend = "cpu"
+
+    def source(self, field):
+        return self.forward.source(field)
+
+    def msi(self, source, d, alpha, total_time, dt, scale, leaky=True, callback=None):
+        return self.forward.msi(source, d, alpha, total_time, dt, scale, leaky, callback)
+
+    @staticmethod
+    def _parameters(values, channels, name):
+        values = np.asarray(values, dtype=float)
+        if values.ndim == 0:
+            values = np.repeat(values, channels)
+        if values.shape != (channels,) or not np.isfinite(values).all():
+            raise ValueError(f"{name} must be a scalar or one finite value per channel")
+        return values
+
+    def diffuse(self, source, diffusion_coefficients, barrier_alphas,
+                total_time=1., dt=.1, leaky_outer_boundary=True, callback=None):
+        source = np.asarray(source, dtype=float)
+        single = source.ndim == 2
+        if single:
+            source = source[..., None]
+        if source.ndim != 3 or source.shape[:2] != self.mask.shape or not np.isfinite(source).all():
+            raise ValueError("Source must match the mask and have finite intensities")
+        ds = self._parameters(diffusion_coefficients, source.shape[-1], "D")
+        aa = self._parameters(barrier_alphas, source.shape[-1], "alpha")
+        if np.any(ds < 0) or np.any((aa < 0) | (aa > 1)) or not np.isfinite(total_time+dt) or total_time < 0 or dt <= 0:
+            raise ValueError("Invalid diffusion parameters")
+        result = np.stack([self.forward.diffuse(self.source(source[..., c]), d, a,
+                           total_time, dt, leaky_outer_boundary, callback)
+                           for c, (d, a) in enumerate(zip(ds, aa))], axis=-1)
+        return result[..., 0] if single else result
+
+    def generate(self, cell_intensities, diffusion_coefficients, barrier_alphas,
+                 total_time=1., dt=.1, scaling_factor=1,
+                 intensity_mode="total", leaky_outer_boundary=True, callback=None):
+        values = np.asarray(cell_intensities, dtype=float)
+        if values.ndim != 2 or values.shape[1] != len(self.cell_ids) or not len(values):
+            raise ValueError("cell_intensities must be channel-by-cell")
+        ds = self._parameters(diffusion_coefficients, len(values), "D")
+        aa = self._parameters(barrier_alphas, len(values), "alpha")
+        if int(scaling_factor) != scaling_factor or scaling_factor < 1:
+            raise ValueError("scaling_factor must be a positive integer")
+        if np.any(ds < 0) or np.any((aa < 0) | (aa > 1)) or not np.isfinite(total_time+dt) or total_time < 0 or dt <= 0:
+            raise ValueError("Invalid diffusion parameters")
+        return np.stack([self.msi(self.source(render_simulator_source(
+            self.mask, values[c], intensity_mode)), d, a, total_time, dt,
+            int(scaling_factor), leaky_outer_boundary, callback)
+            for c, (d, a) in enumerate(zip(ds, aa))], axis=-1)
 
 
 def slide_cell_until_free(mask, mask_canvas, p_top_left):
@@ -223,10 +412,8 @@ def generate_and_plot_canvases(validator):
                             p_top_left[0]:p_top_left[0] + len(mask[0])
                         ]
                         cell_mask[mask_region == cell_id] = cell_id
-                        msi_cell, cell_intensities = validator.generate_maldi_cell(
-                            cell_type,
-                            cell_mask,
-                            sigma=40
+                        msi_cell, cell_intensities = sample_maldi_cell(
+                            cell_mask, [cell_type.get_intensity(mass) for mass in validator.mass_list]
                         )
 
                         if (p_top_left_cell[0] >= 0
@@ -256,14 +443,18 @@ def generate_and_plot_canvases(validator):
     # diffusion & downsampling into final MSI canvas
     h, w = validator.mask_canvas.shape
 
-    validator.diffusion_canvas = diffuse_mask_batched(
-        validator.mask_canvas[h // 4: h // 4 + len(validator.cell_canvas), w // 4: w // 4 + len(validator.cell_canvas[0])],
+    engine = CanvasGenerator(
+        validator.mask_canvas[h // 4:h // 4 + len(validator.cell_canvas),
+                              w // 4:w // 4 + len(validator.cell_canvas[0])].astype(np.int32),
+        backend=getattr(validator, "computation_backend", "cpu"),
+    )
+    validator.diffusion_canvas = engine.diffuse(
         validator.cell_canvas,
         total_time=validator.diffusion_total_time,
         dt=validator.diffusion_dt,
-        diffusion_coeff=validator.diffusion_coeff,
-        barrier_alpha=validator.diffusion_barrier_alpha,
-        leaky_outer_boundary=validator.diffusion_leaky_outer_boundary
+        diffusion_coefficients=validator.diffusion_coeff,
+        barrier_alphas=validator.diffusion_barrier_alpha,
+        leaky_outer_boundary=validator.diffusion_leaky_outer_boundary,
     )
 
 

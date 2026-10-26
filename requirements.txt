@@ -8,7 +8,9 @@ Pillow
 PyYAML
 scikit-image
 scikit-learn
-scipy
+scipy>=1.12
 SimpleITK
 tifffile
 tqdm
+# Install separately on CUDA hosts:
+# python -m pip install 'cupy-cuda12x[ctk]>=14,<15'

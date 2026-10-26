@@ -97,9 +97,7 @@ def estimate_mu_from_distribution(
     Estimate diffusion strength D*T and foreground/background permeability alpha
     directly on the native MSI/MALDI grid.
 
-    This intentionally avoids high-resolution background-ring distances, because
-    those distances are not physically meaningful when the MALDI pixel is much
-    larger than the segmentation-mask pixel.
+    Background-ring distances are measured in native MSI pixels.
 
     Interpretation:
         mu_est:
@@ -107,8 +105,8 @@ def estimate_mu_from_distribution(
             diffuses on the high-resolution canvas with mic_spacing=1.
 
         barrier_alpha_est:
-            0.0 -> no permeability into background.
-            1.0 -> full Gaussian diffusion into background.
+            0.0 -> zero permeability into background.
+            1.0 -> full permeability into background.
 
     Estimation logic:
         - The MSI channel is optionally power-transformed for estimation only.
@@ -117,7 +115,7 @@ def estimate_mu_from_distribution(
         - Far background is measured farther away, also in native MSI pixels.
         - If near background does not decay toward far background, alpha is 0.
         - mu is based on median cell size in MSI pixels and intracellular
-          homogeneity, not on fitting background halos.
+          homogeneity.
     """
     raw = np.asarray(distribution, dtype=np.float64)
     frac = np.asarray(mask_fraction, dtype=np.float64)

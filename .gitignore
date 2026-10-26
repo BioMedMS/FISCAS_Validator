@@ -4,11 +4,10 @@
 
 /.quarto/
 /output
-/input
-/Data_Quality_Analyzer/input
+/Data_Quality_Analyzer/input/*
+!/Data_Quality_Analyzer/input/.gitkeep
 /reports
 /textures
-Data_Quality_Analyzer/input
 *test*.py
 *test*.ipynb
 *test*.qmd
@@ -43,4 +42,6 @@ __pycache__/
 Calculate_Replicates.ipynb
 render_animation.py
 
-
+# Shared engine: local environment and results.
+.venv/
+/Data_Quality_Analyzer/output*/
