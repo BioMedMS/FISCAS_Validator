@@ -26,20 +26,21 @@ class VerificationResult:
         return np.load(self.output_dir / "generated_final.npy")
 
 
-def verify(cell_mask, maldi_block, scaling_factor=None, *, backend="auto",
+def verify(cell_mask, maldi_block, scaling_factor, *, total_time, dt, backend="auto",
            render=True, output_dir=None, mass_list=None, channels=None,
-           flatten=True, crop=(0, 0, 0, 0), total_time=1., dt=.1,
+           flatten=True, crop=(0, 0, 0, 0),
            rtol=1e-8, apply_noise=True, noise_seed=42,
            score_rtol=.005, d_rtol=.25, alpha_atol=.1,
            d_values=None, alpha_values=None):
     """Estimate local cell totals, then global D/alpha using the shared simulator.
 
     Input arrays must already be aligned. MALDI can be HxW or HxWxC; mass labels
-    are optional. An integer scaling factor can be inferred from array shapes.
+    are loaded from an optional .npy file. The integer grid ratio is required.
     All results are saved before the optional rendering stage.
     """
-    if not np.isfinite(total_time + dt) or total_time < 0 or dt <= 0:
-        raise ValueError("Require finite time >= 0 and dt > 0")
+    if (not np.isfinite(total_time + dt) or total_time < 0 or dt <= 0
+            or (total_time > 0 and dt >= total_time)):
+        raise ValueError("Require finite time >= 0 and dt > 0; dt must be smaller than positive time")
     if backend not in ("auto", "gpu", "cpu"):
         raise ValueError("backend must be auto, gpu or cpu")
     if not np.isfinite(rtol) or not 0 < rtol < 1:
@@ -51,7 +52,7 @@ def verify(cell_mask, maldi_block, scaling_factor=None, *, backend="auto",
     if (not np.isfinite([score_rtol, d_rtol, alpha_atol]).all()
             or not 0 < score_rtol < 1 or d_rtol <= 0 or alpha_atol <= 0):
         raise ValueError("Invalid convergence tolerances")
-    if scaling_factor is not None and (not np.isfinite(scaling_factor)
+    if scaling_factor is None or (not np.isfinite(scaling_factor)
                                        or scaling_factor < 1 or int(scaling_factor) != scaling_factor):
         raise ValueError("scaling_factor must be a positive integer")
     if scaling_factor is not None:
@@ -62,6 +63,10 @@ def verify(cell_mask, maldi_block, scaling_factor=None, *, backend="auto",
             if (values.ndim != 1 or not len(values) or not np.isfinite(values).all()
                     or np.any(values < 0) or (name == "alpha" and np.any(values > 1))):
                 raise ValueError(f"Invalid explicit {name} candidates")
+    if mass_list is not None:
+        if not isinstance(mass_list, (str, Path)):
+            raise TypeError("mass_list must be a .npy file path")
+        mass_list = np.load(mass_list, allow_pickle=False)
     data = prepare_data(cell_mask, maldi_block, mass_list, crop=crop,
                         scale=scaling_factor, flatten=flatten, channel_indexes=channels)
     output = Path(output_dir) if output_dir is not None else Path(
@@ -83,7 +88,7 @@ def main(argv=None):
                         help='Override the MALDI file in --input-dir')
     parser.add_argument('--mass-list', type=Path)
     parser.add_argument('--channels', type=int, nargs='+')
-    parser.add_argument('--scale', type=int)
+    parser.add_argument('--scale', type=int, required=True)
     parser.add_argument('--backend', choices=['auto', 'gpu', 'cpu'], default='auto')
     parser.add_argument('--output-dir', type=Path)
     parser.add_argument('--render', action=argparse.BooleanOptionalAction, default=True)
@@ -91,8 +96,8 @@ def main(argv=None):
         '--flatten', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--noise', action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument('--noise-seed', type=int, default=42)
-    parser.add_argument('--time', type=float, default=1.)
-    parser.add_argument('--dt', type=float, default=.1)
+    parser.add_argument('--time', type=float, required=True)
+    parser.add_argument('--dt', type=float, required=True)
     parser.add_argument('--rtol', type=float, default=1e-8)
     parser.add_argument('--crop', type=int, nargs=4, default=[0, 0, 0, 0])
     parser.add_argument('--score-rtol', type=float, default=.005)
@@ -112,7 +117,7 @@ def main(argv=None):
                          path}. Place cell_mask.npy and maldi_block.npy in --input-dir or provide explicit file paths.')
     result = verify(np.load(cell_mask, mmap_mode='r'),
                     np.load(maldi_block, mmap_mode='r'), args.scale,
-                    mass_list=np.load(mass_list) if mass_list else None,
+                    mass_list=mass_list,
                     channels=args.channels, backend=args.backend, output_dir=args.output_dir,
                     render=args.render, flatten=args.flatten, apply_noise=args.noise,
                     noise_seed=args.noise_seed, total_time=args.time, dt=args.dt,

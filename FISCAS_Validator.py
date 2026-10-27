@@ -25,6 +25,7 @@ import pickle
 from sklearn.decomposition import PCA
 from canvas_generation import generate_and_plot_canvases, sample_maldi_cell
 import uuid
+from pathlib import Path
 
 # matplotlib.use('Agg')
 
@@ -45,37 +46,79 @@ plt.rc('figure', autolayout=True)
 
 class Validator:
     def __init__(self,
-                 cell_types,  # define cell populations with CellType objects,
+                 cell_types, *,
+                 canvas_size, mic_spacing, ms_spacing, cell_density,
+                 diffusion_total_time, diffusion_dt, diffusion_coeff,
+                 diffusion_barrier_alpha,
                  output="./output",
                  # skip registration by using the inverse of perturbation transform
                  use_perfect_registration=False,
                  use_perfect_segmentation=True,  # skip segmentation by using the ground truth masks
-                 teaching_imprecision=10,  # accuracy of landmark registration in µm
-                 canvas_size=2000,  # in µm
-                 mic_spacing=0.6897,  # pixel size of microscope canvas in µm 10X ~ 0.65; 20X ~ 0.325; 50X ~ 0.13
-                 ms_spacing=1,  # pixel size of msi in µm
-                 cell_density=0.2,  # percentage of total canvas area
+                 teaching_imprecision=None,  # accuracy of landmark registration in µm
                  max_cell_placement_iterations=1000,  # max attempts to place cells on canvas
                  rotation=0,  # in degree
                  scale=1.0,
-                 # list of m/z values to simulate
-                 mass_list=[369.35, 760.58, 744.55, 958.78],
+                 mass_list=None,
                  seed=0,  # random seed for reproducibility
                  plot=True,  # plot canvasses
                  save_img=True,  # save canvasses in output directory
                  remove_ambiguous=True,  # remove pixel that touch more than one cell
                  cell_diameter=0,  # parameter for cell segmentation
                  render_animation=False,  # render animation of spectra compilation
-                 texture="registration",  # apply texture to msi canvas
-                 texture_path="./textures/texture.jpg",
+                 texture=None,  # apply texture to msi canvas
+                 texture_path=None,
                  texture_epsilon_add=0,  # strength of texture; -1 < epsilon < 1
                  texture_epsilon_multiply=0,  # strength of texture; -1 < epsilon < 1
-                 diffusion_total_time=100.0,
-                 diffusion_dt=1,
-                 diffusion_coeff=[0.1, 1, 50, 10],
-                 diffusion_barrier_alpha=[0.1, 0.3, 0.7, 0.5],
                  diffusion_leaky_outer_boundary=True,
                  computation_backend="cpu"):
+
+        if not cell_types:
+            raise ValueError("Provide at least one cell type")
+        channel_count = len(cell_types[0].parameters) - 1
+        channel_ids = list(range(1, channel_count + 1))
+        if channel_count < 1 or any(
+                set(cell.parameters) != {"path", *channel_ids} for cell in cell_types):
+            raise ValueError("Cell parameters must contain path and channels numbered 1, 2, 3, ...")
+        if mass_list is None:
+            mass_list = channel_ids
+        else:
+            if not isinstance(mass_list, (str, Path)):
+                raise TypeError("mass_list must be a .npy file path")
+            mass_list = np.load(mass_list, allow_pickle=False)
+            if (mass_list.ndim != 1 or len(mass_list) != channel_count
+                    or not np.isfinite(mass_list).all() or len(np.unique(mass_list)) != channel_count):
+                raise ValueError("Mass file must contain one unique finite m/z per channel")
+            cell_types = copy.deepcopy(cell_types)
+            for cell in cell_types:
+                original = cell.parameters
+                cell.parameters = {"path": original["path"], **{
+                    mass: original[channel] for channel, mass in zip(channel_ids, mass_list)}}
+        for name, value in (("canvas_size", canvas_size), ("mic_spacing", mic_spacing),
+                            ("ms_spacing", ms_spacing)):
+            if not np.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be finite and positive")
+        if ms_spacing < mic_spacing:
+            raise ValueError("ms_spacing must be at least mic_spacing")
+        if not np.isfinite(cell_density) or not 0 < cell_density <= 1:
+            raise ValueError("cell_density must lie in (0, 1]")
+        if (not np.isfinite([diffusion_total_time, diffusion_dt]).all()
+                or diffusion_total_time < 0 or diffusion_dt <= 0
+                or (diffusion_total_time > 0 and diffusion_dt >= diffusion_total_time)):
+            raise ValueError("Require time >= 0 and dt > 0, with dt < time when diffusion is enabled")
+        for name, value in (("diffusion_coeff", diffusion_coeff),
+                            ("diffusion_barrier_alpha", diffusion_barrier_alpha)):
+            values = np.asarray(value)
+            if (values.ndim > 1 or (values.ndim == 1 and len(values) != channel_count)
+                    or not np.isfinite(values).all() or np.any(values < 0)
+                    or (name == "diffusion_barrier_alpha" and np.any(values > 1))):
+                raise ValueError(f"Invalid {name}: supply a scalar or one value per channel")
+        if not use_perfect_registration and teaching_imprecision is None:
+            raise ValueError("teaching_imprecision is required for landmark registration")
+        if teaching_imprecision is not None and (
+                not np.isfinite(teaching_imprecision) or teaching_imprecision < 0):
+            raise ValueError("teaching_imprecision must be finite and nonnegative")
+        if texture is not None and texture_path is None:
+            raise ValueError("texture_path is required when texture is enabled")
 
         if computation_backend not in ("auto", "gpu", "cpu"):
             raise ValueError("computation_backend must be auto, gpu or cpu")
@@ -128,7 +171,7 @@ class Validator:
             plt.rcParams.update({'font.size': 30})
             n = len(self.mass_list)
             c = int(np.ceil(np.sqrt(n)))
-            fig, ax = plt.subplots(c, c, figsize=(6, 6))
+            fig, ax = plt.subplots(c, c, figsize=(6, 6), squeeze=False)
             k = 0
             colors = ["red", "black", "blue", "green",
                       "orange", "purple", "brown", "pink"]
@@ -146,9 +189,9 @@ class Validator:
                                 np.exp(-0.5 * ((x - m) / s) ** 2)
                         if cell_type.parameters[mz][0] == "uniform":
                             y = np.where((x >= m - s) & (x <= m + s), 1 / (2 * s), 0)
-                        ax[k // 2, k % 2].plot(x, y, label=f"{cell_type.name} - " + "$\it{m/z}$ " + f"{
+                        ax.flat[k].plot(x, y, label=f"{cell_type.name} - " + "$\it{m/z}$ " + f"{
                             mz} (μ={m}, σ={s})", color=colors[c])
-                        ax[k // 2, k % 2].legend(loc='lower center',
+                        ax.flat[k].legend(loc='lower center',
                                                  bbox_to_anchor=(0.5, 1), ncol=1)
                     except Exception as e:
                         continue
@@ -1171,49 +1214,16 @@ class CellType:
 
 
 if __name__ == "__main__":
-    mass_list = [1, 2, 3, 4]
-    parameters_A = {"path": "./Cell_Library/DLD-1",
-                    mass_list[0]: ["normal", 15, 5],
-                    mass_list[1]: ["normal", 22, 5],
-                    mass_list[2]: ["normal", 9, 5],
-                    mass_list[3]: ["normal", 15, 5]
-                    }
-    parameters_B = {"path": "./Cell_Library/Colo205",
-                    mass_list[0]: ["normal", 15, 5],
-                    mass_list[1]: ["normal", 10, 3],
-                    mass_list[2]: ["normal", 40, 15],
-                    mass_list[3]: ["normal", 0, 1]
-                    }
+    import argparse
+    import json
 
-    A = CellType("A", parameters_A, 0.6)
-    B = CellType("B", parameters_B, 0.4)
-
-    valid = Validator(
-        use_perfect_segmentation=True,
-        use_perfect_registration=False,
-        remove_ambiguous=False,
-        seed=43,
-        scale=1.0,
-        teaching_imprecision=10,
-        rotation=0.2,
-        ms_spacing=20,
-        mic_spacing=0.6897,
-        plot=True,
-        save_img=False,
-        canvas_size=1000,
-        cell_density=0.2,
-        mass_list=mass_list,
-        cell_types=[A, B],
-        render_animation=False,
-        diffusion_total_time=0.0,
-        diffusion_dt=1,
-        diffusion_coeff=[0.54, 6.54, 9.92, 23.57],
-        diffusion_barrier_alpha=[0.047, 0.059, 0.061, 0.145],
-        diffusion_leaky_outer_boundary=True,
-        texture=None,
-        texture_path="./textures/noise_gradient_150x150.jpg",
-        texture_epsilon_add=0.13,
-        texture_epsilon_multiply=0.3,)
-
-    a, b, c, d, e = valid.main()
-    _ = valid.return_settings()
+    parser = argparse.ArgumentParser(description="Generate and evaluate synthetic MALDI data")
+    parser.add_argument("--config", type=Path, required=True, help="JSON simulator configuration")
+    args = parser.parse_args()
+    settings = json.loads(args.config.read_text())
+    settings["cell_types"] = [CellType(
+        item["name"], {int(key) if key != "path" else key: value
+                       for key, value in item["parameters"].items()}, item["population"])
+        for item in settings["cell_types"]]
+    Path(settings.get("output", "output")).mkdir(parents=True, exist_ok=True)
+    Validator(**settings).main()

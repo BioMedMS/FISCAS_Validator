@@ -22,7 +22,7 @@ def clean_l1(prediction, target):
 
 
 def channel_label(channel, mass):
-    return f"Channel {int(channel)}" if mass is None else f"m/z {float(mass):.8f}"
+    return f"Channel {int(channel) + 1}" if mass is None else f"m/z {float(mass):.8f}"
 
 
 def fit_global_gain(prediction, target):
@@ -57,12 +57,12 @@ def prepare_data(raw, msi, all_masses=None, crop=(0, 0, 0, 0),
     if not raw.size or 0 in msi.shape:
         raise ValueError("Cell mask and MALDI block must be nonempty")
     if all_masses is not None:
-        all_masses = np.asarray(all_masses, dtype=float).ravel()
-        if len(all_masses) != msi.shape[-1] or not np.isfinite(all_masses).all():
+        all_masses = np.asarray(all_masses, dtype=float)
+        if all_masses.ndim != 1 or len(all_masses) != msi.shape[-1] or not np.isfinite(all_masses).all():
             raise ValueError("Provide one finite mass per MSI channel")
-    if scale is None:
-        scale = int(
-            round((raw.shape[0] / msi.shape[0] + raw.shape[1] / msi.shape[1]) / 2))
+    if scale is None or not np.isfinite(scale) or scale < 1 or int(scale) != scale:
+        raise ValueError("Provide the positive integer mask-to-MALDI grid ratio")
+    scale = int(scale)
     if scale < 1 or tuple(int(np.ceil(s / scale)) for s in raw.shape) != msi.shape[:2]:
         raise ValueError(
             "Mask/MSI dimensions do not align at the integer scale; provide aligned inputs and --scale")
@@ -470,7 +470,7 @@ def save_results(output, target, ids, masses, channels, scale, totals, winners,
         writer.writeheader()
         for source_channel, row in zip(channels, winners):
             writer.writerow(dict(channel=int(
-                source_channel), mass=row["mass"], D=row["D"], alpha=row["alpha"], gain=row["gain"], clean_full_l1=row["l1"]))
+                source_channel) + 1, mass=row["mass"], D=row["D"], alpha=row["alpha"], gain=row["gain"], clean_full_l1=row["l1"]))
     final = generated
     if apply_noise:
         try:

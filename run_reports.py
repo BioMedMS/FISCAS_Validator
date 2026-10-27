@@ -156,7 +156,7 @@ for j in seeds:
         save_img=save_img,
         canvas_size=canvas_size,
         cell_density=cell_density,
-        mass_list=mass_list,
+        mic_spacing=mic_spacing,
         cell_types=cell_types,
         diffusion_total_time=diffusion_total_time,
         diffusion_dt=diffusion_dt,
