@@ -24,7 +24,6 @@ output_dir = os.path.join(output_base, "reports")
 os.makedirs(output_dir, exist_ok=True)
 
 
-
 textures_base_rel = "textures"
 textures_dir = os.path.join(base_dir, textures_base_rel)
 noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
@@ -32,32 +31,32 @@ noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg"
 
 
 # Validator parameters
-output="./output/"
-use_perfect_registration=False
-use_perfect_segmentation=True
-teaching_imprecision=10
-canvas_size=1000
-mic_spacing=0.6897
-ms_spacing=5
-cell_density=0.2
-max_cell_placement_iterations=1000
-rotation=0
-scale=1.00
-mass_list=[1, 2, 3, 4]
-seed=42
-plot=False
-save_img=True
-remove_ambiguous=True
-cell_diameter=120
-texture=None
-texture_path=""
-texture_epsilon_add=0.13
-texture_epsilon_multiply=0.3
-diffusion_total_time=0.0
-diffusion_dt=1
-diffusion_coeff=[0.1,1,10,50]
-diffusion_barrier_alpha=[0.1,0.3,0.5,0.7]
-diffusion_leaky_outer_boundary=True
+output = "./output/"
+use_perfect_registration = False
+use_perfect_segmentation = True
+teaching_imprecision = 10
+canvas_size = 1000
+mic_spacing = 0.6897
+ms_spacing = 5
+cell_density = 0.2
+max_cell_placement_iterations = 1000
+rotation = 0
+scale = 1.00
+mass_list = [1, 2, 3, 4]
+seed = 42
+plot = False
+save_img = True
+remove_ambiguous = True
+cell_diameter = 120
+texture = None
+texture_path = ""
+texture_epsilon_add = 0.13
+texture_epsilon_multiply = 0.3
+diffusion_total_time = 0.0
+diffusion_dt = 1
+diffusion_coeff = [0.1, 1, 10, 50]
+diffusion_barrier_alpha = [0.1, 0.3, 0.5, 0.7]
+diffusion_leaky_outer_boundary = True
 
 params_best_case = {
     "diffusion_total_time": 0,
@@ -101,7 +100,7 @@ diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, te
 validator_instances = []
 result_files = glob.glob(output_dir + "/*.csv")
 finished_seeds = []
-seeds = list(range(1,21))
+seeds = list(range(1, 21))
 for file in result_files:
     m = re.search(r'seed_(\d+)', file)
     seed_num = int(m.group(1)) if m else None
@@ -121,45 +120,44 @@ for j in seeds:
     np.random.seed(seed)
 
     # define cell populations
-    parameters_A = {"path" : "./Cell_Library/DLD-1",
-                mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 22, 5],
-                mass_list[2] : ["normal", 33, 3],
-                mass_list[3] : ["normal", 15, 5]
-                }
-    parameters_B = {"path" : "./Cell_Library/Colo205",
-                mass_list[0] : ["normal", 15, 5], 
-                mass_list[1] : ["normal", 10, 3],
-                mass_list[2] : ["normal", 40, 20],
-                mass_list[3] : ["normal", 0, 1]    
-                }
+    parameters_A = {"path": "./Cell_Library/DLD-1",
+                    mass_list[0]: ["normal", 15, 5],
+                    mass_list[1]: ["normal", 22, 5],
+                    mass_list[2]: ["normal", 33, 3],
+                    mass_list[3]: ["normal", 15, 5]
+                    }
+    parameters_B = {"path": "./Cell_Library/Colo205",
+                    mass_list[0]: ["normal", 15, 5],
+                    mass_list[1]: ["normal", 10, 3],
+                    mass_list[2]: ["normal", 40, 20],
+                    mass_list[3]: ["normal", 0, 1]
+                    }
 
     A = CellType("A", parameters_A, 0.5)
     B = CellType("B", parameters_B, 0.5)
 
-    cell_types=[A,B]
+    cell_types = [A, B]
 
     run_dir = os.path.join(output_base, f"run_{j}")
     os.makedirs(run_dir, exist_ok=True)
 
-
     # Create validator object
     A = Validator(
         output=run_dir,
-        use_perfect_segmentation=use_perfect_segmentation, 
-        use_perfect_registration=use_perfect_registration, 
+        use_perfect_segmentation=use_perfect_segmentation,
+        use_perfect_registration=use_perfect_registration,
         remove_ambiguous=remove_ambiguous,
-        seed=seed, 
-        scale=scale, 
-        teaching_imprecision=teaching_imprecision, 
-        rotation=rotation, 
-        ms_spacing=ms_spacing, 
-        plot=plot, 
-        save_img=save_img, 
-        canvas_size=canvas_size, 
-        cell_density=cell_density, 
+        seed=seed,
+        scale=scale,
+        teaching_imprecision=teaching_imprecision,
+        rotation=rotation,
+        ms_spacing=ms_spacing,
+        plot=plot,
+        save_img=save_img,
+        canvas_size=canvas_size,
+        cell_density=cell_density,
         mass_list=mass_list,
-        cell_types = cell_types,
+        cell_types=cell_types,
         diffusion_total_time=diffusion_total_time,
         diffusion_dt=diffusion_dt,
         diffusion_coeff=diffusion_coeff,
@@ -171,7 +169,6 @@ for j in seeds:
         texture_epsilon_multiply=texture_epsilon_multiply)
 
     validator_instances.append(A)
-    
 
 
 def run_validator(A):
@@ -187,17 +184,18 @@ def run_validator(A):
     seed = A.seed
     setting_columns = list(settings.keys())
     columns = copy.copy(setting_columns)
-    parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0", "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
+    parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0",
+                  "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
     for param in parameters:
-       columns.append(param)
+        columns.append(param)
     df = pd.DataFrame(columns=columns)
     values = []
     for setting_value in settings.values():
-       values.append(setting_value)
+        values.append(setting_value)
 
     for i in range(2):
-       values.append(float(registration_metrics['mre'][i]))
-       values.append(float(registration_metrics['mre_std'][i]))
+        values.append(float(registration_metrics['mre'][i]))
+        values.append(float(registration_metrics['mre_std'][i]))
 
     for i in range(4):
         values.append(float(spectra_metrics['spectra_mean_deviation'][i]))
@@ -205,11 +203,14 @@ def run_validator(A):
 
     values.append(float(spectra_metrics['FPR']))
     values.append(float(cluster_metrics['adjusted_rand_index']))
-    df = pd.concat([df, pd.DataFrame([values], columns=df.columns)], axis=0, ignore_index=True)
+    df = pd.concat([df, pd.DataFrame([values], columns=df.columns)],
+                   axis=0, ignore_index=True)
 
-    df.to_csv(output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
+    df.to_csv(
+        output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
 
     return A.seed, 0
+
 
 # Save commands to a file for debugging or later use
 commands_file = os.path.join(output_base, "commands.txt")
@@ -218,7 +219,7 @@ with open(commands_file, "w") as f:
         f.write(f"Run {idx}:\n")
         f.write(" ".join(cmd) + "\n")
         f.write("\n")
-max_workers = 4#os.cpu_count()
+max_workers = 4  # os.cpu_count()
 
 slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
 if slurm_cpus:
@@ -228,8 +229,8 @@ else:
 
 
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-   futures = [executor.submit(run_validator, A) for A in validator_instances]
-   for f in as_completed(futures):
-       idx, returncode = f.result()
-       status = "OK" if returncode == 0 else f"FAILED ({returncode})"
-       print(f"[{datetime.datetime.now().time()}] Run {idx} finished: {status}")
+    futures = [executor.submit(run_validator, A) for A in validator_instances]
+    for f in as_completed(futures):
+        idx, returncode = f.result()
+        status = "OK" if returncode == 0 else f"FAILED ({returncode})"
+        print(f"[{datetime.datetime.now().time()}] Run {idx} finished: {status}")

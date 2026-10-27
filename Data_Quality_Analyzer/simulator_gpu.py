@@ -46,7 +46,8 @@ class GPUSimulator:
         from cupyx.scipy.fft import dctn, idctn
         from cupyx.scipy.sparse.linalg import LinearOperator, cg
         if 'rtol' not in signature(cg).parameters:
-            raise ImportError('The CUDA solver requires CuPy >= 14. Install cupy-cuda12x[ctk]>=14,<15.')
+            raise ImportError(
+                'The CUDA solver requires CuPy >= 14. Install cupy-cuda12x[ctk]>=14,<15.')
         self.cp, self.dctn, self.idctn = cp, dctn, idctn
         self.LinearOperator, self.cg = LinearOperator, cg
         self.mask = cp.asarray(mask, dtype=cp.int32)
@@ -54,9 +55,9 @@ class GPUSimulator:
         self.rtol = float(rtol)
         self.kernel = cp.RawKernel(_KERNEL, 'apply_grid')
         h, w = self.shape
-        fy = 2 - 2*cp.cos(cp.pi*cp.arange(h, dtype=cp.float64)/h)
-        fx = 2 - 2*cp.cos(cp.pi*cp.arange(w, dtype=cp.float64)/w)
-        self.spectrum = fy[:, None]+fx[None, :]
+        fy = 2 - 2 * cp.cos(cp.pi * cp.arange(h, dtype=cp.float64) / h)
+        fx = 2 - 2 * cp.cos(cp.pi * cp.arange(w, dtype=cp.float64) / w)
+        self.spectrum = fy[:, None] + fx[None, :]
 
     def source(self, array):
         return self.cp.asarray(array, dtype=self.cp.float64)
@@ -78,16 +79,17 @@ class GPUSimulator:
             return u if return_device else cp.asnumpy(u)
         h, w = self.shape
         size = self.mask.size
-        blocks = ((size+255)//256,)
-        args = (np.int64(h), np.int64(w), np.float64(dt*coefficient), np.float64(alpha))
+        blocks = ((size + 255) // 256,)
+        args = (np.int64(h), np.int64(w), np.float64(
+            dt * coefficient), np.float64(alpha))
 
         def apply(vector):
             result = cp.empty_like(vector)
             self.kernel(blocks, (256,), (vector, self.mask, result, *args, np.int32(0)))
             return result
 
-        if dt*coefficient >= 5 and alpha >= .01:
-            inverse = 1.0/(1.0+dt*coefficient*self.spectrum)
+        if dt * coefficient >= 5 and alpha >= .01:
+            inverse = 1.0 / (1.0 + dt * coefficient * self.spectrum)
 
             def precondition(vector):
                 transformed = self.dctn(vector.reshape(h, w), type=2, norm='ortho')
@@ -99,11 +101,12 @@ class GPUSimulator:
             cp.reciprocal(inverse, out=inverse)
 
             def precondition(vector):
-                return vector*inverse
+                return vector * inverse
 
         operator = self.LinearOperator((size, size), matvec=apply, dtype=cp.float64)
-        preconditioner = self.LinearOperator((size, size), matvec=precondition, dtype=cp.float64)
-        steps = int(np.round(time/dt))
+        preconditioner = self.LinearOperator(
+            (size, size), matvec=precondition, dtype=cp.float64)
+        steps = int(np.round(time / dt))
         for step in range(steps):
             rhs = u.ravel()
             iterations = 0
@@ -112,8 +115,8 @@ class GPUSimulator:
             def iteration(_):
                 nonlocal iterations, last_notice
                 iterations += 1
-                if callback is not None and clock.monotonic()-last_notice >= 5.:
-                    callback(step+1, steps, iterations)
+                if callback is not None and clock.monotonic() - last_notice >= 5.:
+                    callback(step + 1, steps, iterations)
                     last_notice = clock.monotonic()
 
             solution, info = self.cg(operator, rhs, x0=rhs.copy(), M=preconditioner,
@@ -125,7 +128,7 @@ class GPUSimulator:
                 u[0, :] = u[-1, :] = 0
                 u[:, 0] = u[:, -1] = 0
             if callback is not None:
-                callback(step+1, steps, iterations)
+                callback(step + 1, steps, iterations)
         return u if return_device else cp.asnumpy(u)
 
     def msi(self, source, coefficient, alpha, time, dt, scale, leaky=True, callback=None):
@@ -136,6 +139,6 @@ class GPUSimulator:
         pad_h, pad_w = (-h) % scale, (-w) % scale
         if pad_h or pad_w:
             field = cp.pad(field, ((0, pad_h), (0, pad_w)))
-        result = field.reshape(field.shape[0]//scale, scale,
-                               field.shape[1]//scale, scale).sum(axis=(1, 3))
+        result = field.reshape(field.shape[0] // scale, scale,
+                               field.shape[1] // scale, scale).sum(axis=(1, 3))
         return cp.asnumpy(result)

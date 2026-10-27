@@ -38,14 +38,13 @@ def _cells(mask):
 def _unit_cells(mask):
     """Yield cell IDs, bounding boxes, unit profiles and profile totals."""
     mask, ids = _cells(mask)
-    # Compute bounding boxes in one pass; compact sparse labels for the lookup.
     if len(ids) and int(ids[-1]) > max(10_000, 10 * len(ids)):
         labels = np.searchsorted(np.r_[0, ids], mask)
         boxes = find_objects(labels)
         cell_boxes = [boxes[i] for i in range(len(ids))]
     else:
         boxes = find_objects(mask)
-        cell_boxes = [boxes[int(cell_id)-1] for cell_id in ids]
+        cell_boxes = [boxes[int(cell_id) - 1] for cell_id in ids]
     for cell_id, box in zip(ids, cell_boxes):
         top, bottom = box[0].start, box[0].stop
         left, right = box[1].start, box[1].stop
@@ -54,7 +53,7 @@ def _unit_cells(mask):
         x0, x1 = max(0, left - 1), min(mask.shape[1], right + 1)
         binary = mask[y0:y1, x0:x1] == cell_id
         field = cell_profile(binary)
-        unit = field[top-y0:bottom-y0, left-x0:right-x0]
+        unit = field[top - y0:bottom - y0, left - x0:right - x0]
         yield int(cell_id), (top, bottom, left, right), unit, float(field.sum())
 
 
@@ -77,7 +76,8 @@ def render_simulator_source(mask, intensities, intensity_mode="total"):
     mask, ids = _cells(mask)
     values = np.asarray(intensities, dtype=float)
     if values.shape != (len(ids),) or not np.isfinite(values).all() or np.any(values < 0):
-        raise ValueError("provide one finite nonnegative intensity per positive mask ID")
+        raise ValueError(
+            "provide one finite nonnegative intensity per positive mask ID")
     if intensity_mode not in ("total", "factor"):
         raise ValueError("intensity_mode must be 'total' or 'factor'")
     source = np.zeros(mask.shape, dtype=float)
@@ -89,6 +89,7 @@ def render_simulator_source(mask, intensities, intensity_mode="total"):
 
 class CPUForward:
     """CPU backend for label-weighted implicit Euler diffusion."""
+
     def __init__(self, mask, rtol):
         from Data_Quality_Analyzer.simulator_iterative import diffuse_mask_iterative
         self.mask, self.rtol = mask, rtol
@@ -100,7 +101,7 @@ class CPUForward:
     def diffuse(self, source, coefficient, alpha, time, dt, leaky=True,
                 callback=None, return_device=False):
         return self._diffuse(self.mask, source, time, dt, coefficient,
-            alpha, leaky, self.rtol, maxiter=self.mask.size, callback=callback)
+                             alpha, leaky, self.rtol, maxiter=self.mask.size, callback=callback)
 
     def msi(self, source, d, alpha, total_time, dt, scale, leaky=True, callback=None):
         return sum_pool(self.diffuse(source, d, alpha, total_time, dt, leaky,
@@ -114,8 +115,8 @@ def sum_pool(field, scale):
     h, w = field.shape
     if h % scale or w % scale:
         field = np.pad(field, ((0, (-h) % scale), (0, (-w) % scale)))
-    return field.reshape(field.shape[0]//scale, scale,
-                         field.shape[1]//scale, scale).sum(axis=(1, 3))
+    return field.reshape(field.shape[0] // scale, scale,
+                         field.shape[1] // scale, scale).sum(axis=(1, 3))
 
 
 class CanvasGenerator:
@@ -123,6 +124,7 @@ class CanvasGenerator:
 
     Intensities are channel-by-cell, ordered by ascending positive label ID.
     """
+
     def __init__(self, cell_mask, backend="auto", rtol=1e-8):
         self.mask, self.cell_ids = _cells(cell_mask)
         if not 0 < rtol < 1 or not np.isfinite(rtol):
@@ -134,7 +136,8 @@ class CanvasGenerator:
             try:
                 from Data_Quality_Analyzer.simulator_gpu import GPUSimulator
                 # Compact arbitrary IDs before transferring to the int32 GPU mask.
-                labels = np.searchsorted(np.r_[0, self.cell_ids], self.mask).astype(np.int32)
+                labels = np.searchsorted(
+                    np.r_[0, self.cell_ids], self.mask).astype(np.int32)
                 self.forward = GPUSimulator(labels, self.rtol)
                 self.backend = "gpu"
             except (ImportError, RuntimeError):
@@ -171,7 +174,7 @@ class CanvasGenerator:
             raise ValueError("Source must match the mask and have finite intensities")
         ds = self._parameters(diffusion_coefficients, source.shape[-1], "D")
         aa = self._parameters(barrier_alphas, source.shape[-1], "alpha")
-        if np.any(ds < 0) or np.any((aa < 0) | (aa > 1)) or not np.isfinite(total_time+dt) or total_time < 0 or dt <= 0:
+        if np.any(ds < 0) or np.any((aa < 0) | (aa > 1)) or not np.isfinite(total_time + dt) or total_time < 0 or dt <= 0:
             raise ValueError("Invalid diffusion parameters")
         result = np.stack([self.forward.diffuse(self.source(source[..., c]), d, a,
                            total_time, dt, leaky_outer_boundary, callback)
@@ -188,7 +191,7 @@ class CanvasGenerator:
         aa = self._parameters(barrier_alphas, len(values), "alpha")
         if int(scaling_factor) != scaling_factor or scaling_factor < 1:
             raise ValueError("scaling_factor must be a positive integer")
-        if np.any(ds < 0) or np.any((aa < 0) | (aa > 1)) or not np.isfinite(total_time+dt) or total_time < 0 or dt <= 0:
+        if np.any(ds < 0) or np.any((aa < 0) | (aa > 1)) or not np.isfinite(total_time + dt) or total_time < 0 or dt <= 0:
             raise ValueError("Invalid diffusion parameters")
         return np.stack([self.msi(self.source(render_simulator_source(
             self.mask, values[c], intensity_mode)), d, a, total_time, dt,
@@ -234,8 +237,6 @@ def generate_and_plot_canvases(validator):
     All results are written back onto the `validator` instance.
     """
 
-
-
     start = time.perf_counter()
 
     # spacing & conversion factors
@@ -243,7 +244,6 @@ def generate_and_plot_canvases(validator):
     validator.mic_spacing = validator.ms_spacing / scaling_factor
     mic_to_ms = validator.mic_spacing / validator.ms_spacing
     ms_to_mic = validator.ms_spacing / validator.mic_spacing
-
 
     # initializing empty canvasses
     validator.mic_canvas = np.zeros(
@@ -266,7 +266,6 @@ def generate_and_plot_canvases(validator):
          len(validator.mass_list))
     )
 
-
     # MSI TL/BR in microscopy coordinates
     msi_tl = (
         int(0.25 * len(validator.mic_canvas[0])),
@@ -280,7 +279,6 @@ def generate_and_plot_canvases(validator):
     # expose these to the Validator instance for later use (registration & spectra)
     validator.msi_tl = msi_tl
     validator.msi_br = msi_br
-
 
     density = 0.0
     i = 0  # counter for placement iterations
@@ -299,12 +297,12 @@ def generate_and_plot_canvases(validator):
         y = random.randint(0, len(validator.mic_canvas))
         p = (x, y)
 
-        cell_type = random.choices(validator.cell_types, weights=[ct.population for ct in validator.cell_types], k=1)[0]
-        
-        cell, mask, current_mask_index = validator.load_random_cell(cell_type.get_directory(),
-            mask_index=current_id
-        )
+        cell_type = random.choices(validator.cell_types, weights=[
+                                   ct.population for ct in validator.cell_types], k=1)[0]
 
+        cell, mask, current_mask_index = validator.load_random_cell(cell_type.get_directory(),
+                                                                    mask_index=current_id
+                                                                    )
 
         # prevent cell images to violate canvas border
         p_top_left = (
@@ -319,7 +317,7 @@ def generate_and_plot_canvases(validator):
         if (p_top_left[0] > 0
             and p_top_left[1] > 0
             and p_bottom_right[0] < len(validator.mic_canvas[0])
-            and p_bottom_right[1] < len(validator.mic_canvas)):
+                and p_bottom_right[1] < len(validator.mic_canvas)):
 
             canvas_area = validator.mask_canvas[
                 p_top_left[1]:p_top_left[1] + len(mask),
@@ -384,7 +382,7 @@ def generate_and_plot_canvases(validator):
                 if (p_top_left[0] > 0.25 * len(validator.mic_canvas[0])
                     and p_top_left[0] < 0.75 * len(validator.mic_canvas[0])
                     and p_top_left[1] > 0.25 * len(validator.mic_canvas)
-                    and p_top_left[1] < 0.75 * len(validator.mic_canvas)):
+                        and p_top_left[1] < 0.75 * len(validator.mic_canvas)):
 
                     # conversion to local ms coordinate system (cell_canvas)
                     p_top_left_cell = np.array(
@@ -413,13 +411,14 @@ def generate_and_plot_canvases(validator):
                         ]
                         cell_mask[mask_region == cell_id] = cell_id
                         msi_cell, cell_intensities = sample_maldi_cell(
-                            cell_mask, [cell_type.get_intensity(mass) for mass in validator.mass_list]
+                            cell_mask, [cell_type.get_intensity(
+                                mass) for mass in validator.mass_list]
                         )
 
                         if (p_top_left_cell[0] >= 0
                             and p_top_left_cell[1] >= 0
                             and p_bottom_right_cell[0] < len(validator.cell_canvas[0])
-                            and p_bottom_right_cell[1] < len(validator.cell_canvas)):
+                                and p_bottom_right_cell[1] < len(validator.cell_canvas)):
 
                             for j in range(len(validator.mass_list)):
                                 validator.cell_canvas[
@@ -439,7 +438,6 @@ def generate_and_plot_canvases(validator):
 
         current_id = current_mask_index + 1
 
-    
     # diffusion & downsampling into final MSI canvas
     h, w = validator.mask_canvas.shape
 
@@ -457,9 +455,6 @@ def generate_and_plot_canvases(validator):
         leaky_outer_boundary=validator.diffusion_leaky_outer_boundary,
     )
 
-
-    
-
     # plotting canvases if requested
     if validator.plot or validator.save_img:
         # --- Microscopy Canvas ---
@@ -475,14 +470,13 @@ def generate_and_plot_canvases(validator):
         mgr = getattr(fig_mask.canvas, "manager", None)
         if mgr is not None and hasattr(mgr, "set_window_title"):
             mgr.set_window_title("Ground Truth Mask Canvas")
-        masked_canvas = np.ma.masked_where(validator.mask_canvas == 0, validator.mask_canvas)
+        masked_canvas = np.ma.masked_where(
+            validator.mask_canvas == 0, validator.mask_canvas)
         my_cmap = plt.cm.prism.copy()
         my_cmap.set_bad(color="black")
         ax_mask.imshow(masked_canvas, cmap=my_cmap)
         ax_mask.set_title("Ground Truth Mask Canvas")
         ax_mask.axis("off")
-
-        
 
         # --- MSI Canvas Origin Resolution ---
 
@@ -523,7 +517,6 @@ def generate_and_plot_canvases(validator):
         ax[1, 1].set_title(f"m/z {validator.mass_list[3]}")
         ax[1, 1].axis("off")
 
-        
         fig_cell, ax_cell = plt.subplots(figsize=(6, 6))
         mgr = getattr(fig_cell.canvas, "manager", None)
         if mgr is not None and hasattr(mgr, "set_window_title"):
@@ -585,8 +578,7 @@ def generate_and_plot_canvases(validator):
         ax[1, 1].set_title(f"m/z {validator.mass_list[3]}")
         ax[1, 1].axis("off")
 
-        
-        #if validator.plot:
+        # if validator.plot:
         #    plt.show()
         # --- Save if requested ---
         if validator.save_img:
@@ -602,7 +594,8 @@ def generate_and_plot_canvases(validator):
                 pad_inches=0,
                 dpi=600,
             )
-            skimage.io.imsave(validator.output + "/mask_canvas.tiff", validator.mask_canvas.astype(np.uint16))
+            skimage.io.imsave(validator.output + "/mask_canvas.tiff",
+                              validator.mask_canvas.astype(np.uint16))
             fig_cell.savefig(
                 validator.output + "/cell_canvas.svg",
                 bbox_inches="tight",
@@ -610,28 +603,25 @@ def generate_and_plot_canvases(validator):
                 dpi=600,
             )
             fig_panel.savefig(
-                            validator.output + "/panel_canvas.svg",
-                            bbox_inches="tight",
-                            pad_inches=0,
-                            dpi=600,
-                        )
+                validator.output + "/panel_canvas.svg",
+                bbox_inches="tight",
+                pad_inches=0,
+                dpi=600,
+            )
             fig_cell_panel.savefig(
-                            validator.output + "/cell_panel_canvas.svg",
-                            bbox_inches="tight",
-                            pad_inches=0,
-                            dpi=600,
-                        )
-            
-            
-        #plt.close(fig_mic)
-        #plt.close(fig_mask)
-        #plt.close(fig_cell)
-        #plt.close(fig_diff)
-        #plt.close(fig_panel)
-        #plt.close(fig_coords)
-        #plt.close(fig_grid)
+                validator.output + "/cell_panel_canvas.svg",
+                bbox_inches="tight",
+                pad_inches=0,
+                dpi=600,
+            )
 
-                
+        # plt.close(fig_mic)
+        # plt.close(fig_mask)
+        # plt.close(fig_cell)
+        # plt.close(fig_diff)
+        # plt.close(fig_panel)
+        # plt.close(fig_coords)
+        # plt.close(fig_grid)
 
     # canvas-level metrics
     validator.canvas_metrics["n_cells"] = len(validator.mic_coordinates)

@@ -1,6 +1,7 @@
 import numpy as np
 from scipy.ndimage import distance_transform_edt
 
+
 def estimate_diffusion_parameter(msi, msi_generated, canvas=None, scaling_factor=None, eps=1e-12):
     """
     Compare target MSI and generated MSI by channel.
@@ -34,7 +35,8 @@ def estimate_diffusion_parameter(msi, msi_generated, canvas=None, scaling_factor
             scores.append(0.0)
             continue
 
-        leaked_signal_percentage = (total_signal_gt - total_signal_sim) / total_signal_gt
+        leaked_signal_percentage = (
+            total_signal_gt - total_signal_sim) / total_signal_gt
 
         if leaked_signal_percentage >= 0.5:
             score = 1.0
@@ -136,7 +138,8 @@ def estimate_mu_from_distribution(
         raise ValueError("scaling_factor must be positive.")
 
     if far_background_radius_ms <= near_background_radius_ms:
-        raise ValueError("far_background_radius_ms must be greater than near_background_radius_ms.")
+        raise ValueError(
+            "far_background_radius_ms must be greater than near_background_radius_ms.")
 
     u = _prepare_estimation_distribution(
         distribution=raw,
@@ -156,7 +159,8 @@ def estimate_mu_from_distribution(
 
     cell_pixels = frac >= cell_fraction_threshold
     background_pixels = frac <= background_fraction_threshold
-    mixed_pixels = (frac > background_fraction_threshold) & (frac < cell_fraction_threshold)
+    mixed_pixels = (frac > background_fraction_threshold) & (
+        frac < cell_fraction_threshold)
 
     if not np.any(cell_pixels):
         return {
@@ -203,7 +207,8 @@ def estimate_mu_from_distribution(
     mu_est = float((sigma_px_est ** 2) / 2.0)
 
     if max_mu is not None:
-        mu_est = float(min(mu_est, float(max_mu))) * np.exp(0.34 * max(0.0, mu_est - 5.0))
+        mu_est = float(min(mu_est, float(max_mu))) * \
+            np.exp(0.34 * max(0.0, mu_est - 5.0))
         sigma_px_est = float(np.sqrt(2.0 * mu_est)) if mu_est > 0 else 0.0
         sigma_ms_est = sigma_px_est / float(scaling_factor)
 
@@ -225,7 +230,8 @@ def estimate_mu_from_distribution(
         near_background = mixed_pixels
 
     if not np.any(far_background):
-        far_background = background_pixels & (dist_to_cell_ms > float(near_background_radius_ms))
+        far_background = background_pixels & (
+            dist_to_cell_ms > float(near_background_radius_ms))
 
     if not np.any(far_background):
         far_background = background_pixels
@@ -250,7 +256,8 @@ def estimate_mu_from_distribution(
     elif background_drop <= eps:
         barrier_alpha_est = 0.0
     else:
-        barrier_alpha_est = float(np.clip(background_drop / max(edge_drop, eps), 0.0, 1.0))
+        barrier_alpha_est = float(
+            np.clip(background_drop / max(edge_drop, eps), 0.0, 1.0))
 
     return {
         "mu_est": float(mu_est),

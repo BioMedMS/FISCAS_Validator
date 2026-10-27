@@ -1,6 +1,7 @@
 """Gaussian noise postprocessing with optional residual-rank matching."""
 import numpy as np
 
+
 def apply_noise_model(canvas, target, seed=None, clip_nonnegative=True, rank_match=True):
     canvas = np.asarray(canvas, dtype=np.float32)
     target = np.asarray(target, dtype=np.float32)
@@ -43,6 +44,7 @@ def apply_noise_model(canvas, target, seed=None, clip_nonnegative=True, rank_mat
         return result.astype(np.float32)
 
     raise ValueError("canvas and target must be either 2D or 3D arrays.")
+
 
 def _apply_noise_model_single_channel(canvas_ch, target_ch, rng, rank_match=True):
     residual = target_ch - canvas_ch
