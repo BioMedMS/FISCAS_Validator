@@ -1,6 +1,6 @@
 # FISCAS Validator
 
-Generate synthetic single-cell MALDI images and evaluate registration, segmentation and cell spectra. The Data Quality Analyzer (DQA) fits simulation parameters to an aligned cell mask and measured MALDI block. Both use the shared canvas generator.
+Generate synthetic single-cell MALDI images and evaluate registration, segmentation and cell spectra. The Data Quality Analyzer (DQA) fits simulation parameters to an aligned cell mask and measured MALDI block.
 
 ## Install
 
