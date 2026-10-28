@@ -450,11 +450,12 @@ def load_random_cell(cell_directory, mask_index=255, seed=None, rng=None):
         scaling_factor = 1
         cell_chosen = seed
     # open corresponding cell mask
-    cell_mask = np.array(Image.open(masks[cell_chosen]), dtype=np.uint16)
-    mask_ids = np.unique(cell_mask)
+    original_mask = np.array(Image.open(masks[cell_chosen]), dtype=np.uint16)
+    cell_mask = np.zeros_like(original_mask)
+    mask_ids = np.unique(original_mask)
     for mask_id in mask_ids:
         if mask_id != 0:
-            cell_mask[cell_mask == mask_id] = mask_index
+            cell_mask[original_mask == mask_id] = mask_index
             mask_index += 1
     mask_index -= 1
     current_mask_index = mask_index
@@ -490,6 +491,8 @@ def add_texture(image, texture_path, texture_epsilon_add):
     texture = np.array(Image.open(texture_path))
     if len(texture.shape) == 3:
         texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
+    if not np.any(texture):
+        return image
     texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
     # Normalize texture and weight it by epsilon
     texture = texture / np.max(texture) * texture_epsilon_add
@@ -509,6 +512,8 @@ def multiply_texture(image, texture_path, texture_epsilon_multiply):
     texture = np.array(Image.open(texture_path))
     if len(texture.shape) == 3:
         texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
+    if not np.any(texture):
+        return image
     texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
     texture = (texture / np.max(texture)).astype(float)
     texture += texture_epsilon_multiply

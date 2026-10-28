@@ -142,7 +142,7 @@ Generation settings belong to `CanvasSettings`; evaluation settings belong to `V
 | `scale` | `1.0` | Geometric perturbation scale factor. |
 | `use_perfect_registration` | `False` | Recover alignment from the known perturbation transform. |
 | `teaching_imprecision` | required for landmark registration | Maximum landmark-placement offset in µm. |
-| `use_perfect_segmentation` | `True` | Use ground-truth masks for spectrum extraction. `False` runs Cellpose. |
+| `use_perfect_segmentation` | `True` | Use ground-truth masks for spectrum extraction. `False` runs Cellpose 3, as constrained in `requirements.txt`. |
 | `cell_diameter` | `0` | Cellpose diameter in pixels; `0` requests automatic estimation. |
 | `remove_ambiguous` | `True` | Exclude MALDI pixels covering multiple cells from spectrum extraction. |
 | `diffusion_total_time` | required | Total diffusion time; `0` disables diffusion. |
@@ -160,6 +160,8 @@ Generation settings belong to `CanvasSettings`; evaluation settings belong to `V
 | `render_animation` | `False` | Save frames of pixel-to-cell spectrum assignment. |
 
 Batch report runs use separate worker processes to isolate random generators and plotting.
+
+The PCA plot is produced when at least two channels and two usable cells are available.
 
 `main()` returns dictionaries for canvas, registration, segmentation, spectra and clustering metrics. It also saves cell spectra, ground truth and mask mappings as pickle files in `output`.
 

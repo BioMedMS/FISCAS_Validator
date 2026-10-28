@@ -235,7 +235,9 @@ class Validator:
         return intersection / union if union != 0 else 0
 
     # match predicted mask indices with ground truth indices using Kuhn-Munkres algorithm
-    def match_masks(self, predictions, ground_truths):
+    def match_masks(self, predictions, ground_truths, iou_threshold=0.5):
+        if not np.isfinite(iou_threshold) or not 0 <= iou_threshold <= 1:
+            raise ValueError("iou_threshold must lie between zero and one")
         num_pred = len(predictions)
         num_gt = len(ground_truths)
         iou_matrix = np.zeros((num_pred, num_gt))
@@ -244,7 +246,8 @@ class Validator:
                 iou_matrix[i, j] = self.calculate_iou(pred_mask, gt_mask)
         # Negative for maximization
         row_ind, col_ind = linear_sum_assignment(-iou_matrix)
-        matches = [(i, j) for i, j in zip(row_ind, col_ind) if iou_matrix[i, j] > 0.5]
+        matches = [(i, j) for i, j in zip(row_ind, col_ind)
+                   if iou_matrix[i, j] > iou_threshold]
         return matches, iou_matrix
 
     # convert label image to binary masks
@@ -265,7 +268,8 @@ class Validator:
             # all predictions are false positives -> precision = 0
             return {}, 0.0, 0.0, 0.0
 
-        matches, iou_matrix = self.match_masks(predictions, ground_truths)
+        matches, iou_matrix = self.match_masks(
+            predictions, ground_truths, iou_threshold)
 
         iou_all_masks = {}
         for pred_index, gt_index in matches:
@@ -573,7 +577,8 @@ class Validator:
         ground_truths = self.label_image_to_masks(mask_cut_cleared)
         iou_all_masks, precision, recall, f1_score = self.evaluate_segmentation(
             predictions, ground_truths, iou_threshold=0.5)
-        self.segmentation_metrics['mean IoU'] = np.mean(list(iou_all_masks.values()))
+        self.segmentation_metrics['mean IoU'] = (
+            float(np.mean(list(iou_all_masks.values()))) if iou_all_masks else 0.0)
         self.segmentation_metrics['precision'] = precision
         self.segmentation_metrics['recall'] = recall
         self.segmentation_metrics['f1_score'] = f1_score
@@ -677,7 +682,7 @@ class Validator:
             grid_size = int(np.ceil(np.sqrt(len(self.mass_list))))
             if grid_size > 5:
                 grid_size = 5
-            f_histograms, axes = plt.subplots(grid_size, grid_size, figsize=(6, 4))
+            f_histograms, axes = plt.subplots(grid_size, grid_size, figsize=(6, 4), squeeze=False)
             axes = axes.flatten()
 
         self.measured_intensities = {}
@@ -767,7 +772,7 @@ class Validator:
         self.cluster_metrics["true_labels"] = true_labels
         self.cluster_metrics["predicted_labels"] = predicted_labels
 
-        if self.plot or self.save_img:
+        if (self.plot or self.save_img) and min(standardized_spectra.shape) >= 2:
             pca = PCA(n_components=2)
             pca_result = pca.fit_transform(standardized_spectra)
             unique_labels, true_labels_int = np.unique(true_labels, return_inverse=True)

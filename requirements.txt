@@ -1,4 +1,4 @@
-cellpose
+cellpose>=3,<4
 imzy
 matplotlib
 numpy
