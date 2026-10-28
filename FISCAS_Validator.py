@@ -287,6 +287,8 @@ class Validator:
         return iou_all_masks, precision, recall, f1_score
 
     def main(self):
+        rng = random.Random()
+        rng.setstate(self.canvas.random_state)
         ms_to_mic = self.ms_spacing / self.mic_spacing
 
         maldi_sitk = sitk.GetImageFromArray(self.maldi_canvas[:, :, 0])
@@ -419,10 +421,10 @@ class Validator:
         if self.teaching_imprecision is not None and self.teaching_imprecision > 0:
             for i in range(len(mic_landmarks)):
                 for j in range(2):
-                    shift = random.uniform(-self.teaching_imprecision / 2,
+                    shift = rng.uniform(-self.teaching_imprecision / 2,
                                         self.teaching_imprecision / 2)
                     mic_landmarks[i][j] += shift
-                    shift = random.uniform(0, self.teaching_imprecision)
+                    shift = rng.uniform(0, self.teaching_imprecision)
                     moving_pertubated_landmarks[i][j] += shift
 
         mic_image_points_flat = [c for p in mic_landmarks for c in p]
@@ -477,7 +479,9 @@ class Validator:
         registration_method.SetInitialTransform(composite_transform, inPlace=False)
         registration_method.SetInterpolator(sitk.sitkLinear)
         registration_method.SetMetricSamplingStrategy(registration_method.RANDOM)
-        registration_method.SetMetricSamplingPercentage(0.1)
+        registration_method.SetMetricSamplingPercentage(
+            0.1, 1 + int(self.seed) % (2**32 - 1))
+        registration_method.SetNumberOfThreads(1)
         registration_method.SetOptimizerScalesFromPhysicalShift()
         if self.use_perfect_registration:
             translation_transform = sitk.TranslationTransform(2)

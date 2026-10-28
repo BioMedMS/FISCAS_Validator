@@ -132,12 +132,12 @@ Generation settings belong to `CanvasSettings`; evaluation settings belong to `V
 | `cell_types` | required | List of `CellType` objects to sample. |
 | `output` | `./output` | Existing directory for results and saved images. |
 | `canvas_size` | required | Square microscopy canvas side length in µm. |
-| `mic_spacing` | required | Requested microscopy pixel size in µm; adjusted to an integer MSI-to-microscopy ratio. |
-| `ms_spacing` | required | MALDI pixel size in µm. Must be at least `mic_spacing`. |
+| `mic_spacing` | required | Requested microscopy pixel size in µm. For a noninteger spacing ratio, it becomes `ms_spacing / floor(ms_spacing / mic_spacing)`; the requested and effective values are printed. |
+| `ms_spacing` | required | MALDI pixel size in µm. Must be at least `mic_spacing`. Integer multiples preserve the requested microscopy spacing. |
 | `cell_density` | required | Target fraction of the microscopy canvas covered by cells. |
 | `max_cell_placement_iterations` | `1000` | Placement attempt limit. |
 | `mass_list` | optional | Path to a `.npy` file with one unique finite m/z per channel. Otherwise channels are named `1, 2, 3, …`. Channel count comes from the cell-type parameters. |
-| `seed` | `0` | Random seed for cell sampling and placement. |
+| `seed` | `0` | Per-run random seed for cell sampling, placement, intensities and registration sampling. |
 | `rotation` | `0` | Geometric perturbation angle in degrees. |
 | `scale` | `1.0` | Geometric perturbation scale factor. |
 | `use_perfect_registration` | `False` | Recover alignment from the known perturbation transform. |
@@ -158,6 +158,8 @@ Generation settings belong to `CanvasSettings`; evaluation settings belong to `V
 | `plot` | `True` | Display result figures. |
 | `save_img` | `True` | Save result figures. |
 | `render_animation` | `False` | Save frames of pixel-to-cell spectrum assignment. |
+
+Batch report runs use separate worker processes to isolate random generators and plotting.
 
 `main()` returns dictionaries for canvas, registration, segmentation, spectra and clustering metrics. It also saves cell spectra, ground truth and mask mappings as pickle files in `output`.
 

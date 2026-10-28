@@ -119,10 +119,22 @@ class GPUSimulator:
                     callback(step + 1, steps, iterations)
                     last_notice = clock.monotonic()
 
-            solution, info = self.cg(operator, rhs, x0=rhs.copy(), M=preconditioner,
-                                     rtol=self.rtol, atol=0., maxiter=size, callback=iteration)
-            if info != 0:
-                raise RuntimeError(f"GPU simulator failed to converge: {info}")
+            tolerance = self.rtol * float(cp.linalg.norm(rhs))
+            solution = rhs.copy()
+            residual = float(cp.linalg.norm(rhs - apply(solution)))
+            if not np.isfinite(residual):
+                raise RuntimeError("GPU simulator initial residual is nonfinite")
+            while residual > tolerance:
+                previous_residual = residual
+                solution, info = self.cg(operator, rhs, x0=solution, M=preconditioner,
+                                         rtol=self.rtol, atol=0., callback=iteration)
+                residual = float(cp.linalg.norm(rhs - apply(solution)))
+                if np.isfinite(residual) and residual <= tolerance:
+                    break
+                if not np.isfinite(residual) or info < 0 or residual >= previous_residual:
+                    raise RuntimeError(f"GPU simulator failed to converge at step "
+                                       f"{step + 1}/{steps} (info={info}, "
+                                       f"residual={residual:.6g}, tolerance={tolerance:.6g})")
             u = solution.reshape(h, w)
             if leaky:
                 u[0, :] = u[-1, :] = 0

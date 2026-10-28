@@ -16,12 +16,15 @@ if 'rtol' not in signature(cg).parameters:
 
 def diffuse_mask_iterative(mask, source, total_time, dt=0.1,
                            diffusion_coeff=1.0, barrier_alpha=0.1,
-                           leaky_outer_boundary=True, rtol=1e-8, maxiter=5000,
+                           leaky_outer_boundary=True, rtol=1e-8, maxiter=None,
                            progress=False, preconditioner_type="auto", callback=None):
     """Diffuse one channel with matrix-free conjugate gradients.
 
     Each step targets ||A*u - rhs|| <= rtol*||rhs|| for a symmetric positive
-    definite system. Nonconvergence raises RuntimeError.
+    definite system, verified using the true residual. Already converged
+    iterates skip CG. The default iteration budget is the SciPy default;
+    residual correction continues while the true residual improves.
+    Nonconvergence raises RuntimeError.
     """
     labels = np.asarray(mask)
     u = np.asarray(source, dtype=np.float64).copy()
@@ -29,7 +32,7 @@ def diffuse_mask_iterative(mask, source, total_time, dt=0.1,
         raise ValueError("mask and source must have the same 2D shape")
     if dt <= 0 or total_time < 0 or diffusion_coeff < 0 or not 0 <= barrier_alpha <= 1:
         raise ValueError("invalid diffusion parameters")
-    if not 0 < rtol < 1 or maxiter < 1:
+    if not 0 < rtol < 1 or (maxiter is not None and maxiter < 1):
         raise ValueError("require 0 < rtol < 1 and maxiter >= 1")
     if total_time <= dt:
         return u
@@ -99,12 +102,26 @@ def diffuse_mask_iterative(mask, source, total_time, dt=0.1,
                 callback(step + 1, steps, iterations)
                 last_notice = clock.monotonic()
 
-        solved, info = cg(operator, rhs, x0=rhs.copy(), M=preconditioner,
-                          rtol=rtol, atol=0.0, maxiter=maxiter,
-                          callback=count_iteration)
-        if info != 0:
-            raise RuntimeError(f"Simulator CG did not converge at step {
-                               step + 1}/{steps} (info={info}); no final image was accepted")
+        tolerance = rtol * np.linalg.norm(rhs)
+        solved = rhs.copy()
+        residual = np.linalg.norm(rhs - multiply(solved))
+        if not np.isfinite(residual):
+            raise RuntimeError("Simulator initial residual is nonfinite")
+        while residual > tolerance:
+            previous_residual = residual
+            solved, info = cg(operator, rhs, x0=solved, M=preconditioner,
+                              rtol=rtol, atol=0.0, maxiter=maxiter,
+                              callback=count_iteration)
+            residual = np.linalg.norm(rhs - multiply(solved))
+            if np.isfinite(residual) and residual <= tolerance:
+                break
+            if (not np.isfinite(residual) or info < 0 or residual >= previous_residual
+                    or (maxiter is not None and info > 0)):
+                raise RuntimeError(f"Simulator CG did not converge at step "
+                                   f"{step + 1}/{steps} (info={info}, "
+                                   f"residual={residual:.6g}, tolerance={
+                                       tolerance:.6g}); "
+                                   "no final image was accepted")
         u = solved.reshape(h, w)
         # Reset boundary values after each timestep.
         if leaky_outer_boundary:

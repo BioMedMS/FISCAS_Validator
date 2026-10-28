@@ -153,7 +153,7 @@ class CPUForward:
     def diffuse(self, source, coefficient, alpha, time, dt, leaky=True,
                 callback=None, return_device=False):
         return self._diffuse(self.mask, source, time, dt, coefficient,
-                             alpha, leaky, self.rtol, maxiter=self.mask.size, callback=callback)
+                             alpha, leaky, self.rtol, callback=callback)
 
     def msi(self, source, d, alpha, total_time, dt, scale, leaky=True, callback=None):
         return sum_pool(self.diffuse(source, d, alpha, total_time, dt, leaky,
@@ -251,7 +251,8 @@ class CanvasGenerator:
             for c, (d, a) in enumerate(zip(ds, aa))], axis=-1)
 
 
-def slide_cell_until_free(mask, mask_canvas, p_top_left):
+def slide_cell_until_free(mask, mask_canvas, p_top_left, rng=None):
+    rng = random if rng is None else rng
     h_cell, w_cell = mask.shape
     H_canvas, W_canvas = mask_canvas.shape
 
@@ -261,7 +262,7 @@ def slide_cell_until_free(mask, mask_canvas, p_top_left):
         (0, 1),
         (0, -1),
     ]
-    dx, dy = random.choice(directions)
+    dx, dy = rng.choice(directions)
 
     x0, y0 = p_top_left
 
@@ -284,7 +285,11 @@ def slide_cell_until_free(mask, mask_canvas, p_top_left):
 
 
 class CanvasSettings:
-    """Settings for synthetic microscopy and MALDI generation."""
+    """Settings for synthetic microscopy and MALDI generation.
+
+    mic_spacing is adjusted to ms_spacing / floor(ms_spacing / mic_spacing).
+    A noninteger pixel-spacing ratio prints the requested and effective spacing.
+    """
 
     def __init__(self, cell_types, *,
                  canvas_size, mic_spacing, ms_spacing, cell_density,
@@ -393,6 +398,7 @@ class CanvasResult:
     mic_spacing: float
     ms_spacing: float
     mass_list: list | np.ndarray
+    random_state: tuple
 
 
 class CellType:
@@ -412,21 +418,23 @@ class CellType:
     def get_scale(self, mz):
         return self.parameters[mz][2]
 
-    def get_intensity(self, mz):
+    def get_intensity(self, mz, rng=None):
+        rng = np.random if rng is None else rng
         if self.parameters[mz][0] == "normal":
-            intensity = np.abs(np.random.normal(
+            intensity = np.abs(rng.normal(
                 loc=self.parameters[mz][1], scale=self.parameters[mz][2]))
         elif self.parameters[mz][0] == "uniform":
             low = self.parameters[mz][1] - self.parameters[mz][2]
             high = self.parameters[mz][1] + self.parameters[mz][2]
-            intensity = np.abs(np.random.uniform(low=low, high=high))
+            intensity = np.abs(rng.uniform(low=low, high=high))
         return intensity
 
     def get_directory(self):
         return self.parameters["path"]
 
 
-def load_random_cell(cell_directory, mask_index=255, seed=None):
+def load_random_cell(cell_directory, mask_index=255, seed=None, rng=None):
+    rng = random if rng is None else rng
     all_images = glob.glob(os.path.join(
         cell_directory, '**', '*.*'), recursive=True)
     images = sorted([
@@ -434,9 +442,9 @@ def load_random_cell(cell_directory, mask_index=255, seed=None):
     masks = sorted([
         file for file in all_images if 'seg' in os.path.basename(file)])
     if seed is None:
-        angle = random.randint(0, 360)
-        scaling_factor = random.uniform(0.8, 1.2)
-        cell_chosen = random.randint(0, len(images) - 1)
+        angle = rng.randint(0, 360)
+        scaling_factor = rng.uniform(0.8, 1.2)
+        cell_chosen = rng.randint(0, len(images) - 1)
     else:
         angle = 0
         scaling_factor = 1
@@ -519,8 +527,8 @@ def generate_and_plot_canvases(settings):
     snapshot = copy.deepcopy(vars(settings))
     for name in ("mic_coordinates", "msi_coordinates", "cell_intensities", "cell_labels", "canvas_metrics"):
         setattr(scene, name, {})
-    random.seed(scene.seed)
-    np.random.seed(scene.seed)
+    scene.random_rng = random.Random(scene.seed)
+    scene.intensity_rng = np.random.RandomState(scene.seed)
     if scene.plot or scene.save_img:
         plt.rcParams.update({'font.size': 30})
         n = len(scene.mass_list)
@@ -562,7 +570,7 @@ def generate_and_plot_canvases(settings):
                                                     scene.texture_epsilon_multiply)
         scene.registration_image = add_texture(scene.registration_image, scene.texture_path,
                                                scene.texture_epsilon_add)
-    return CanvasResult(settings=snapshot, **{name: getattr(scene, name) for name in (
+    return CanvasResult(settings=snapshot, random_state=scene.random_rng.getstate(), **{name: getattr(scene, name) for name in (
         "mic_canvas",
         "mask_canvas",
         "cell_canvas",
@@ -589,8 +597,13 @@ def _generate_scene(scene):
     start = time.perf_counter()
 
     # spacing & conversion factors
-    scaling_factor = int(scene.ms_spacing / scene.mic_spacing)
+    requested_spacing = scene.mic_spacing
+    scaling_factor = int(scene.ms_spacing / requested_spacing)
     scene.mic_spacing = scene.ms_spacing / scaling_factor
+    if not np.isclose(requested_spacing, scene.mic_spacing, rtol=1e-12, atol=0):
+        print(f"Adapting microscopy pixel spacing from {requested_spacing:.12g} to "
+              f"{scene.mic_spacing:.12g} µm to fit {scaling_factor} microscopy pixels "
+              f"per MALDI pixel ({scene.ms_spacing:.12g} µm).", flush=True)
     mic_to_ms = scene.mic_spacing / scene.ms_spacing
     ms_to_mic = scene.ms_spacing / scene.mic_spacing
 
@@ -642,15 +655,15 @@ def _generate_scene(scene):
         i += 1
 
         # choose random canvas coordinate to place the cell
-        x = random.randint(0, len(scene.mic_canvas[0]))
-        y = random.randint(0, len(scene.mic_canvas))
+        x = scene.random_rng.randint(0, len(scene.mic_canvas[0]))
+        y = scene.random_rng.randint(0, len(scene.mic_canvas))
         p = (x, y)
 
-        cell_type = random.choices(scene.cell_types, weights=[
+        cell_type = scene.random_rng.choices(scene.cell_types, weights=[
             ct.population for ct in scene.cell_types], k=1)[0]
 
         cell, mask, current_mask_index = load_random_cell(cell_type.get_directory(),
-                                                          mask_index=current_id
+                                                          mask_index=current_id, rng=scene.random_rng
                                                           )
 
         # prevent cell images to violate canvas border
@@ -679,7 +692,7 @@ def _generate_scene(scene):
                 success, new_p_top_left = slide_cell_until_free(
                     mask,
                     scene.mask_canvas,
-                    p_top_left
+                    p_top_left, rng=scene.random_rng
                 )
 
                 if not success:
@@ -761,7 +774,7 @@ def _generate_scene(scene):
                         cell_mask[mask_region == cell_id] = cell_id
                         msi_cell, cell_intensities = sample_maldi_cell(
                             cell_mask, [cell_type.get_intensity(
-                                mass) for mass in scene.mass_list]
+                                mass, rng=scene.intensity_rng) for mass in scene.mass_list]
                         )
 
                         if (p_top_left_cell[0] >= 0
