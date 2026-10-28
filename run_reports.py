@@ -2,7 +2,8 @@ import os
 import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
-from FISCAS_Validator import Validator, CellType
+from FISCAS_Validator import Validator
+from canvas_generation import CanvasSettings, CellType, generate_and_plot_canvases
 import numpy as np
 import copy
 import pandas as pd
@@ -10,6 +11,49 @@ import glob
 import re
 import warnings
 warnings.filterwarnings("ignore")
+
+
+def run_validator(configuration):
+    generation, evaluation = configuration
+    print(f"[{datetime.datetime.now().time()}] Starting run {generation.seed}")
+
+    try:
+        A = Validator(generate_and_plot_canvases(generation), **evaluation)
+        canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
+    except Exception as e:
+        print(f"[{datetime.datetime.now().time()}] Error in run {generation.seed}: {e}")
+        return generation.seed, 1
+
+    settings = A.return_settings()
+    seed = A.seed
+    setting_columns = list(settings.keys())
+    columns = copy.copy(setting_columns)
+    parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0",
+                  "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
+    for param in parameters:
+        columns.append(param)
+    df = pd.DataFrame(columns=columns)
+    values = []
+    for setting_value in settings.values():
+        values.append(setting_value)
+
+    for i in range(2):
+        values.append(float(registration_metrics['mre'][i]))
+        values.append(float(registration_metrics['mre_std'][i]))
+
+    for i in range(4):
+        values.append(float(spectra_metrics['spectra_mean_deviation'][i]))
+        values.append(np.sqrt(float(spectra_metrics['spectra_deviation_variance'][i])))
+
+    values.append(float(spectra_metrics['FPR']))
+    values.append(float(cluster_metrics['adjusted_rand_index']))
+    df = pd.concat([df, pd.DataFrame([values], columns=df.columns)],
+                   axis=0, ignore_index=True)
+
+    df.to_csv(
+        output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
+
+    return A.seed, 0
 
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -23,12 +67,10 @@ os.makedirs(output_base, exist_ok=True)
 output_dir = os.path.join(output_base, "reports")
 os.makedirs(output_dir, exist_ok=True)
 
-
 textures_base_rel = "textures"
 textures_dir = os.path.join(base_dir, textures_base_rel)
 noise_texture = os.path.join(textures_dir, "noise_150x150.jpg")
 noise_gradient_texture = os.path.join(textures_dir, "noise_gradient_150x150.jpg")
-
 
 # Validator parameters
 output = "./output/"
@@ -96,7 +138,6 @@ params_worst_case = {
 
 diffusion_total_time, remove_ambiguous, rotation, scale, ms_spacing, texture, texture_path, texture_epsilon_add, texture_epsilon_multiply = params_best_case.values()
 
-
 validator_instances = []
 result_files = glob.glob(output_dir + "/*.csv")
 finished_seeds = []
@@ -116,8 +157,6 @@ for j in seeds:
     seed = j
     if seed == 0:
         seed = random.randint(1, 10000)
-    random.seed(seed)
-    np.random.seed(seed)
 
     # define cell populations
     parameters_A = {"path": "./Cell_Library/DLD-1",
@@ -142,14 +181,10 @@ for j in seeds:
     os.makedirs(run_dir, exist_ok=True)
 
     # Create validator object
-    A = Validator(
+    generation = CanvasSettings(
         output=run_dir,
-        use_perfect_segmentation=use_perfect_segmentation,
-        use_perfect_registration=use_perfect_registration,
-        remove_ambiguous=remove_ambiguous,
         seed=seed,
         scale=scale,
-        teaching_imprecision=teaching_imprecision,
         rotation=rotation,
         ms_spacing=ms_spacing,
         plot=plot,
@@ -168,58 +203,11 @@ for j in seeds:
         texture_epsilon_add=texture_epsilon_add,
         texture_epsilon_multiply=texture_epsilon_multiply)
 
-    validator_instances.append(A)
-
-
-def run_validator(A):
-    print(f"[{datetime.datetime.now().time()}] Starting run {A.seed}")
-
-    try:
-        canvas_metrics, registration_metrics, segmentation_metrics, spectra_metrics, cluster_metrics = A.main()
-    except Exception as e:
-        print(f"[{datetime.datetime.now().time()}] Error in run {A.seed}: {e}")
-        return A.seed, 1
-
-    settings = A.return_settings()
-    seed = A.seed
-    setting_columns = list(settings.keys())
-    columns = copy.copy(setting_columns)
-    parameters = ["MRE X", "STD MRE X", "MRE Y", "STD MRE Y", "m/z 0", "STD m/z 0",
-                  "m/z 1", "STD m/z 1", "m/z 2", "STD m/z 2", "m/z 3", "STD m/z 3", "FPR", "ARI"]
-    for param in parameters:
-        columns.append(param)
-    df = pd.DataFrame(columns=columns)
-    values = []
-    for setting_value in settings.values():
-        values.append(setting_value)
-
-    for i in range(2):
-        values.append(float(registration_metrics['mre'][i]))
-        values.append(float(registration_metrics['mre_std'][i]))
-
-    for i in range(4):
-        values.append(float(spectra_metrics['spectra_mean_deviation'][i]))
-        values.append(np.sqrt(float(spectra_metrics['spectra_deviation_variance'][i])))
-
-    values.append(float(spectra_metrics['FPR']))
-    values.append(float(cluster_metrics['adjusted_rand_index']))
-    df = pd.concat([df, pd.DataFrame([values], columns=df.columns)],
-                   axis=0, ignore_index=True)
-
-    df.to_csv(
-        output_dir + f"/results_summary_seed_{seed}_{settings['ID']}.csv", index=False)
-
-    return A.seed, 0
-
-
-# Save commands to a file for debugging or later use
-commands_file = os.path.join(output_base, "commands.txt")
-with open(commands_file, "w") as f:
-    for idx, cmd, temp_qmd in commands:
-        f.write(f"Run {idx}:\n")
-        f.write(" ".join(cmd) + "\n")
-        f.write("\n")
-max_workers = 4  # os.cpu_count()
+    evaluation = dict(output=run_dir, use_perfect_segmentation=use_perfect_segmentation,
+                      use_perfect_registration=use_perfect_registration,
+                      remove_ambiguous=remove_ambiguous, teaching_imprecision=teaching_imprecision,
+                      plot=plot, save_img=save_img)
+    validator_instances.append((generation, evaluation))
 
 slurm_cpus = os.environ.get("SLURM_CPUS_PER_TASK")
 if slurm_cpus:
@@ -227,9 +215,9 @@ if slurm_cpus:
 else:
     max_workers = 4
 
-
 with ThreadPoolExecutor(max_workers=max_workers) as executor:
-    futures = [executor.submit(run_validator, A) for A in validator_instances]
+    futures = [executor.submit(run_validator, A)
+               for A in validator_instances]
     for f in as_completed(futures):
         idx, returncode = f.result()
         status = "OK" if returncode == 0 else f"FAILED ({returncode})"

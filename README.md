@@ -78,7 +78,8 @@ For a custom configuration in Python:
 
 ```python
 from pathlib import Path
-from FISCAS_Validator import CellType, Validator
+from FISCAS_Validator import Validator
+from canvas_generation import CanvasSettings, CellType, generate_and_plot_canvases
 
 cells = CellType(
     name="example",
@@ -92,7 +93,7 @@ cells = CellType(
 output = Path("output/simulation")
 output.mkdir(parents=True, exist_ok=True)
 
-simulation = Validator(
+settings = CanvasSettings(
     cell_types=[cells],
     output=str(output),
     canvas_size=500,
@@ -104,9 +105,16 @@ simulation = Validator(
     diffusion_coeff=[1, 2],
     diffusion_barrier_alpha=[0.1, 0.2],
     computation_backend="auto",
+    texture=None,
+    plot=False,
+    save_img=True,
+)
+canvas = generate_and_plot_canvases(settings)
+simulation = Validator(
+    canvas,
+    output=str(output),
     use_perfect_registration=True,
     use_perfect_segmentation=True,
-    texture=None,
     plot=False,
     save_img=True,
 )
@@ -117,7 +125,7 @@ metrics = simulation.main()
 
 ### Simulator settings
 
-Required settings have no defaults. Canvas size, pixel spacing, density and diffusion settings must be supplied. Diffusion lists follow channel order; scalar diffusion values apply to every channel.
+Generation settings belong to `CanvasSettings`; evaluation settings belong to `Validator`. `Validator` requires the `CanvasResult` returned by `generate_and_plot_canvases()`. `use_perfect_registration`, `use_perfect_segmentation`, `teaching_imprecision`, `remove_ambiguous`, `cell_diameter` and `render_animation` configure evaluation. `output`, `plot` and `save_img` apply separately to both stages. The other settings configure generation. Required settings have no defaults. Canvas size, pixel spacing, density and diffusion settings must be supplied. Diffusion lists follow channel order; scalar diffusion values apply to every channel.
 
 | Setting | Default | Meaning |
 |---|---|---|

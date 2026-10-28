@@ -1,29 +1,23 @@
 # print("importing modules...")
 import numpy as np
-import glob
 import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-import matplotlib
-from PIL import Image
 import random
 import skimage
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans
 from sklearn.metrics.cluster import contingency_matrix
 from sklearn.metrics import adjusted_rand_score
-import cv2
-from math import radians, cos, sin
 import SimpleITK as sitk
-from cellpose import models
 from tqdm import trange
 import copy
 import time
 from scipy.optimize import linear_sum_assignment
-from scipy.ndimage import distance_transform_edt
 import pickle
 from sklearn.decomposition import PCA
-from canvas_generation import generate_and_plot_canvases, sample_maldi_cell
+from canvas_generation import (CanvasSettings, CanvasResult, CellType, generate_and_plot_canvases,
+                               get_image_center, perturbation_transform, pertubate_coordinates)
 import uuid
 from pathlib import Path
 
@@ -45,259 +39,73 @@ plt.rc('figure', autolayout=True)
 
 
 class Validator:
-    def __init__(self,
-                 cell_types, *,
-                 canvas_size, mic_spacing, ms_spacing, cell_density,
-                 diffusion_total_time, diffusion_dt, diffusion_coeff,
-                 diffusion_barrier_alpha,
-                 output="./output",
-                 # skip registration by using the inverse of perturbation transform
-                 use_perfect_registration=False,
-                 use_perfect_segmentation=True,  # skip segmentation by using the ground truth masks
-                 teaching_imprecision=None,  # accuracy of landmark registration in µm
-                 max_cell_placement_iterations=1000,  # max attempts to place cells on canvas
-                 rotation=0,  # in degree
-                 scale=1.0,
-                 mass_list=None,
-                 seed=0,  # random seed for reproducibility
-                 plot=True,  # plot canvasses
-                 save_img=True,  # save canvasses in output directory
-                 remove_ambiguous=True,  # remove pixel that touch more than one cell
-                 cell_diameter=0,  # parameter for cell segmentation
-                 render_animation=False,  # render animation of spectra compilation
-                 texture=None,  # apply texture to msi canvas
-                 texture_path=None,
-                 texture_epsilon_add=0,  # strength of texture; -1 < epsilon < 1
-                 texture_epsilon_multiply=0,  # strength of texture; -1 < epsilon < 1
-                 diffusion_leaky_outer_boundary=True,
-                 computation_backend="cpu"):
-
-        if not cell_types:
-            raise ValueError("Provide at least one cell type")
-        channel_count = len(cell_types[0].parameters) - 1
-        channel_ids = list(range(1, channel_count + 1))
-        if channel_count < 1 or any(
-                set(cell.parameters) != {"path", *channel_ids} for cell in cell_types):
-            raise ValueError("Cell parameters must contain path and channels numbered 1, 2, 3, ...")
-        if mass_list is None:
-            mass_list = channel_ids
-        else:
-            if not isinstance(mass_list, (str, Path)):
-                raise TypeError("mass_list must be a .npy file path")
-            mass_list = np.load(mass_list, allow_pickle=False)
-            if (mass_list.ndim != 1 or len(mass_list) != channel_count
-                    or not np.isfinite(mass_list).all() or len(np.unique(mass_list)) != channel_count):
-                raise ValueError("Mass file must contain one unique finite m/z per channel")
-            cell_types = copy.deepcopy(cell_types)
-            for cell in cell_types:
-                original = cell.parameters
-                cell.parameters = {"path": original["path"], **{
-                    mass: original[channel] for channel, mass in zip(channel_ids, mass_list)}}
-        for name, value in (("canvas_size", canvas_size), ("mic_spacing", mic_spacing),
-                            ("ms_spacing", ms_spacing)):
-            if not np.isfinite(value) or value <= 0:
-                raise ValueError(f"{name} must be finite and positive")
-        if ms_spacing < mic_spacing:
-            raise ValueError("ms_spacing must be at least mic_spacing")
-        if not np.isfinite(cell_density) or not 0 < cell_density <= 1:
-            raise ValueError("cell_density must lie in (0, 1]")
-        if (not np.isfinite([diffusion_total_time, diffusion_dt]).all()
-                or diffusion_total_time < 0 or diffusion_dt <= 0
-                or (diffusion_total_time > 0 and diffusion_dt >= diffusion_total_time)):
-            raise ValueError("Require time >= 0 and dt > 0, with dt < time when diffusion is enabled")
-        for name, value in (("diffusion_coeff", diffusion_coeff),
-                            ("diffusion_barrier_alpha", diffusion_barrier_alpha)):
-            values = np.asarray(value)
-            if (values.ndim > 1 or (values.ndim == 1 and len(values) != channel_count)
-                    or not np.isfinite(values).all() or np.any(values < 0)
-                    or (name == "diffusion_barrier_alpha" and np.any(values > 1))):
-                raise ValueError(f"Invalid {name}: supply a scalar or one value per channel")
+    def __init__(self, canvas, *, output="./output", use_perfect_registration=False,
+                 use_perfect_segmentation=True, teaching_imprecision=None,
+                 plot=True, save_img=True, remove_ambiguous=True, cell_diameter=0,
+                 render_animation=False):
+        if not isinstance(canvas, CanvasResult):
+            raise TypeError("canvas must be a CanvasResult from canvas generation")
         if not use_perfect_registration and teaching_imprecision is None:
-            raise ValueError("teaching_imprecision is required for landmark registration")
+            raise ValueError(
+                "teaching_imprecision is required for landmark registration")
         if teaching_imprecision is not None and (
                 not np.isfinite(teaching_imprecision) or teaching_imprecision < 0):
             raise ValueError("teaching_imprecision must be finite and nonnegative")
-        if texture is not None and texture_path is None:
-            raise ValueError("texture_path is required when texture is enabled")
-
-        if computation_backend not in ("auto", "gpu", "cpu"):
-            raise ValueError("computation_backend must be auto, gpu or cpu")
-        self.computation_backend = computation_backend
-
-        self.cell_types = cell_types
+        self.canvas = canvas
+        self.cell_types = tuple(cell.name for cell in canvas.settings["cell_types"])
+        self.mic_canvas = canvas.mic_canvas
+        self.mask_canvas = canvas.mask_canvas
+        self.cell_canvas = canvas.cell_canvas
+        self.ms_canvas = canvas.ms_canvas
+        self.diffusion_canvas = canvas.diffusion_canvas
+        self.maldi_canvas = canvas.maldi_canvas
+        self.registration_image = canvas.registration_image
+        self.mic_coordinates = canvas.mic_coordinates
+        self.msi_coordinates = canvas.msi_coordinates
+        self.cell_intensities = canvas.cell_intensities
+        self.cell_labels = canvas.cell_labels
+        self.msi_tl = canvas.msi_tl
+        self.msi_br = canvas.msi_br
+        self.pertubation_transform_maldi = canvas.pertubation_transform_maldi
+        self.canvas_metrics = canvas.canvas_metrics
+        self.mic_spacing = canvas.mic_spacing
+        self.ms_spacing = canvas.ms_spacing
+        self.mass_list = canvas.mass_list
+        self.seed = canvas.settings["seed"]
+        self.rotation = canvas.settings["rotation"]
+        self.scale = canvas.settings["scale"]
         self.output = output
         self.use_perfect_registration = use_perfect_registration
         self.use_perfect_segmentation = use_perfect_segmentation
         self.teaching_imprecision = teaching_imprecision
-        self.canvas_size = canvas_size
-        self.mic_spacing = mic_spacing
-        self.ms_spacing = ms_spacing
-        self.cell_density = cell_density
-        self.max_cell_placement_iterations = max_cell_placement_iterations
-        self.rotation = rotation
-        self.scale = scale
-        self.mass_list = mass_list
-        self.seed = seed
         self.plot = plot
         self.save_img = save_img
         self.remove_ambiguous = remove_ambiguous
         self.cell_diameter = cell_diameter
-        self.canvas_metrics = {}
+        self.render_animation = render_animation
         self.registration_metrics = {}
         self.segmentation_metrics = {}
         self.spectra_metrics = {}
-        self.mic_coordinates = {}
-        self.msi_coordinates = {}
-        self.cell_intensities = {}
-        self.cell_labels = {}
         self.cluster_metrics = {}
-        self.render_animation = render_animation
-        self.texture = texture
-        self.texture_path = texture_path
-        self.texture_epsilon_add = texture_epsilon_add
-        self.texture_epsilon_multiply = texture_epsilon_multiply
-
-        self.diffusion_total_time = diffusion_total_time
-        self.diffusion_dt = diffusion_dt
-        self.diffusion_coeff = diffusion_coeff
-        self.diffusion_barrier_alpha = diffusion_barrier_alpha
-        self.diffusion_leaky_outer_boundary = diffusion_leaky_outer_boundary
-        plt.rcParams.update({'figure.max_open_warning': 0})
-
-        random.seed(self.seed)
-        np.random.seed(self.seed)
-
-        if self.plot or self.save_img:
-            plt.rcParams.update({'font.size': 30})
-            n = len(self.mass_list)
-            c = int(np.ceil(np.sqrt(n)))
-            fig, ax = plt.subplots(c, c, figsize=(6, 6), squeeze=False)
-            k = 0
-            colors = ["red", "black", "blue", "green",
-                      "orange", "purple", "brown", "pink"]
-            for mz in mass_list:
-                for c, cell_type in enumerate(self.cell_types):
-                    try:
-                        m = cell_type.parameters[mz][1]
-                        s = cell_type.parameters[mz][2]
-                        min_x = m - 4 * s
-                        min_x = min_x if min_x >= 0 else 0
-                        max_x = m + 4 * s
-                        x = np.linspace(min_x, max_x, 100)
-                        if cell_type.parameters[mz][0] == "normal":
-                            y = (1 / (s * np.sqrt(2 * np.pi))) * \
-                                np.exp(-0.5 * ((x - m) / s) ** 2)
-                        if cell_type.parameters[mz][0] == "uniform":
-                            y = np.where((x >= m - s) & (x <= m + s), 1 / (2 * s), 0)
-                        ax.flat[k].plot(x, y, label=f"{cell_type.name} - " + "$\it{m/z}$ " + f"{
-                            mz} (μ={m}, σ={s})", color=colors[c])
-                        ax.flat[k].legend(loc='lower center',
-                                                 bbox_to_anchor=(0.5, 1), ncol=1)
-                    except Exception as e:
-                        continue
-                k += 1
-            plt.tight_layout()
-            if self.save_img:
-                plt.savefig(self.output + "/cell_type_distributions.svg",
-                            bbox_inches='tight', pad_inches=0, dpi=600)
-        return None
+        plt.rcParams.update({"figure.max_open_warning": 0})
 
     # function to return dict with settings for report generation with quarto
     def return_settings(self):
-        cell_types = []
-        for i in self.cell_types:
-            cell_types.append(i.name)
-        settings = {
-            "ID": uuid.uuid4(),
-            "cell_types": cell_types,
-            "output": self.output,
-            "use_perfect_registration": self.use_perfect_registration,
-            "use_perfect_segmentation": self.use_perfect_segmentation,
-            "teaching_imprecision": self.teaching_imprecision,
-            "canvas_size": self.canvas_size,
-            "mic_spacing": self.mic_spacing,
-            "ms_spacing": self.ms_spacing,
-            "cell_density": self.cell_density,
-            "max_cell_placement_iterations": self.max_cell_placement_iterations,
-            "rotation": self.rotation,
-            "scale": self.scale,
-            "mass_list": self.mass_list,
-            "seed": self.seed,
-            "plot": self.plot,
-            "save_img": self.save_img,
-            "remove_ambiguous": self.remove_ambiguous,
-            "cell_diameter": self.cell_diameter,
-            "texture": self.texture,
-            "texture_path": self.texture_path,
-            "texture_epsilon_add": self.texture_epsilon_add,
-            "texture_epsilon_multiply": self.texture_epsilon_multiply,
-            "diffusion_total_time": self.diffusion_total_time,
-            "diffusion_dt": self.diffusion_dt,
-            "diffusion_coeff": self.diffusion_coeff,
-            "diffusion_barrier_alpha": self.diffusion_barrier_alpha,
-            "diffusion_leaky_outer_boundary": self.diffusion_leaky_outer_boundary,
-            "computation_backend": self.computation_backend,
-        }
+        settings = dict(self.canvas.settings)
+        settings["cell_types"] = [cell.name for cell in settings["cell_types"]]
+        settings["mic_spacing"] = self.mic_spacing
+        settings["ID"] = uuid.uuid4()
+        settings["output"] = self.output
+        settings["use_perfect_registration"] = self.use_perfect_registration
+        settings["use_perfect_segmentation"] = self.use_perfect_segmentation
+        settings["teaching_imprecision"] = self.teaching_imprecision
+        settings["plot"] = self.plot
+        settings["save_img"] = self.save_img
+        settings["remove_ambiguous"] = self.remove_ambiguous
+        settings["cell_diameter"] = self.cell_diameter
+        settings["render_animation"] = self.render_animation
         return settings
 
-    # loads random cell images and their corresponding masks from folder with prepared cell images and applies random rotation and scale
-    # returns randomized cell image with its corresponding mask
-
-    def load_random_cell(self, cell_directory, mask_index=255, seed=None):
-        all_images = glob.glob(os.path.join(
-            cell_directory, '**', '*.*'), recursive=True)
-        images = sorted([
-            file for file in all_images if 'cell' in os.path.basename(file) and 'seg' not in os.path.basename(file)])
-        masks = sorted([
-            file for file in all_images if 'seg' in os.path.basename(file)])
-        if seed is None:
-            angle = random.randint(0, 360)
-            scaling_factor = random.uniform(0.8, 1.2)
-            cell_chosen = random.randint(0, len(images) - 1)
-        else:
-            angle = 0
-            scaling_factor = 1
-            cell_chosen = seed
-        # open corresponding cell mask
-        cell_mask = np.array(Image.open(masks[cell_chosen]), dtype=np.uint16)
-        mask_ids = np.unique(cell_mask)
-        for mask_id in mask_ids:
-            if mask_id != 0:
-                cell_mask[cell_mask == mask_id] = mask_index
-                mask_index += 1
-        mask_index -= 1
-        current_mask_index = mask_index
-        # with Image.open(images[cell_chosen]) as img:
-        #    cell_image = np.zeros((img.size[1], img.size[0], img.n_frames))
-        #    for i in range(img.n_frames):
-        #       img.seek(i)
-        #       cell_image[:, :, i] = np.array(img)
-        #       cell_image[:, :, i] = skimage.exposure.equalize_adapthist(np.array(img))
-        cell_image = skimage.io.imread(images[cell_chosen])
-        cell_rotated = skimage.transform.rotate(cell_image, angle, resize=True)
-        mask_rotated = skimage.transform.rotate(
-            np.array(cell_mask), angle, order=0, resize=True)
-        cell_scaled = skimage.transform.rescale(
-            cell_rotated, scaling_factor, anti_aliasing=True, channel_axis=-1)
-        mask_scaled = skimage.transform.rescale(
-            mask_rotated, scaling_factor, order=0, anti_aliasing=False)
-        return cell_scaled, mask_scaled.astype(np.uint16), current_mask_index
-
-    # generate MALDI signal distribution for a given cell mask
-
-    def generate_maldi_cell(self, cell_type, mask, sigma=4.0):
-        return sample_maldi_cell(
-            mask, [cell_type.get_intensity(mass) for mass in self.mass_list]
-        )
-
-    # calculate the density of cells on the mask canvas
-    def calculate_cell_density(self):
-        total_area = self.mask_canvas.shape[0] * self.mask_canvas.shape[1]
-        cell_area = np.count_nonzero(self.mask_canvas)
-        density = cell_area / total_area
-        return density
-
-    # interpret registration results (2d-affine)
     def decompose_affine_2d(self, matrix):
         u, s, vh = np.linalg.svd(matrix)
         rotation = np.dot(u, vh)
@@ -311,69 +119,6 @@ class Validator:
         theta_rad = np.arctan2(c, a)
         theta_deg = np.degrees(theta_rad)
         return theta_rad, theta_deg
-
-    # helper function for SITK
-    def get_image_center(self, image):
-        size = image.GetSize()
-        spacing = image.GetSpacing()
-        center = [(index) * spacing[dim]
-                  for dim, index in enumerate(np.array(size) / 2)]
-        return center
-
-    # perform pertubations on MSI canvas using SITK
-    def pertubate_img(self, image, inverse=False):
-        if not isinstance(image, sitk.Image):
-            img = sitk.GetImageFromArray(image)
-        else:
-            img = image
-        scale = 1 / self.scale
-        rotation_angle_degrees = self.rotation
-        rotation_angle_radians = np.deg2rad(rotation_angle_degrees)
-        center = self.get_image_center(img)
-        scaling_transform = sitk.ScaleTransform(2)
-        scaling_transform.SetScale((scale, scale))
-        scaling_transform.SetCenter(center)
-        rotation_transform = sitk.Euler2DTransform()
-        rotation_transform.SetCenter(center)
-        rotation_transform.SetAngle(rotation_angle_radians)
-        pertubation_transform = sitk.CompositeTransform(2)
-        pertubation_transform.AddTransform(rotation_transform)
-        pertubation_transform.AddTransform(scaling_transform)
-        if inverse == True:
-            transformed_image = sitk.Resample(img, img, pertubation_transform.GetInverse(
-            ), sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
-        else:
-            transformed_image = sitk.Resample(
-                img, img, pertubation_transform, sitk.sitkNearestNeighbor, 0.0, img.GetPixelID())
-        if not isinstance(image, sitk.Image):
-            return pertubation_transform, sitk.GetArrayFromImage(transformed_image)
-        else:
-            return pertubation_transform, transformed_image
-
-    # perform pertubations on cell coordinates to evaluate registration performance
-    def pertubate_coordinates(self, coordinates, center, inverse=False):
-        scale = 1 / self.scale
-        rotation_angle_degrees = self.rotation
-        rotation_angle_radians = np.deg2rad(rotation_angle_degrees)
-        scaling_transform = sitk.ScaleTransform(2)
-        scaling_transform.SetScale((scale, scale))
-        scaling_transform.SetCenter(center)
-        rotation_transform = sitk.Euler2DTransform()
-        rotation_transform.SetCenter(center)
-        rotation_transform.SetAngle(rotation_angle_radians)
-        pertubation_transform = sitk.CompositeTransform(2)
-        pertubation_transform.AddTransform(rotation_transform)
-        pertubation_transform.AddTransform(scaling_transform)
-        pertubated_coordinates = []
-        if inverse == True:
-            for point in coordinates:
-                transformed_point = pertubation_transform.GetInverse().TransformPoint(point)
-                pertubated_coordinates.append(transformed_point)
-        else:
-            for point in coordinates:
-                transformed_point = pertubation_transform.TransformPoint(point)
-                pertubated_coordinates.append(transformed_point)
-        return np.array(pertubated_coordinates)
 
     # interpret registration results (2d-affine)
     def interpret_registration_matrix(self, transformations):
@@ -429,29 +174,6 @@ class Validator:
                 self.registration_metrics['theta_deg'] = theta_deg
                 self.registration_metrics['theta_rad'] = theta_rad
         return None
-
-    def rotate_coordinates(self, coords, angle_deg, center_point):
-        angle_rad = radians(angle_deg)
-        rotation_matrix = np.array([
-            [cos(angle_rad), -sin(angle_rad)],
-            [sin(angle_rad), cos(angle_rad)]
-        ])
-        rotated_coords = []
-        for x, y in coords:
-            translated_coords = np.array([x - center_point[0], y - center_point[1]])
-            rotated_translated_coords = np.dot(rotation_matrix, translated_coords)
-            new_x, new_y = rotated_translated_coords + center_point
-            rotated_coords.append((new_x, new_y))
-        return rotated_coords
-
-    def scale_coordinates(self, coords, scale_factors, center_point):
-        scaled_coords = []
-        for x, y in coords:
-            translated_coords = np.array([x - center_point[0], y - center_point[1]])
-            scaled_translated_coords = translated_coords * np.array(scale_factors)
-            new_x, new_y = scaled_translated_coords + center_point
-            scaled_coords.append((new_x, new_y))
-        return np.array(scaled_coords)
 
     def evaluate_registration(self):
         error = []
@@ -532,41 +254,6 @@ class Validator:
         masks = [(label_image == label_id) for label_id in unique_labels]
         return masks
 
-    def add_texture(self, image, texture_path="./texture.jpg"):
-        if np.abs(self.texture_epsilon_add) > 1:
-            # catch epsilon values outside of [-1, 1]
-            self.texture_epsilon_add /= np.abs(self.texture_epsilon_add)
-        image = np.array(image)
-        texture = np.array(Image.open(texture_path))
-        if len(texture.shape) == 3:
-            texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
-        texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
-        # Normalize texture and weight it by epsilon
-        texture = texture / np.max(texture) * self.texture_epsilon_add
-        intensity = np.percentile(image, 99)
-        texture = skimage.exposure.rescale_intensity(
-            texture, in_range=(0, 1), out_range=(0, intensity))
-        combined_image = np.zeros_like(image)
-        combined_image = texture + image
-        return combined_image
-
-    def multiply_texture(self, image, texture_path="./texture.jpg"):
-        if np.abs(self.texture_epsilon_multiply) > 1:
-            # catch epsilon values outside of [-1, 1]
-            self.texture_epsilon_multiply /= np.abs(self.texture_epsilon_multiply)
-        image = np.array(image)
-        texture = np.array(Image.open(texture_path))
-        if len(texture.shape) == 3:
-            texture = np.mean(texture, axis=2)  # Convert to grayscale if RGB
-        texture = skimage.transform.resize(texture, (image.shape[1], image.shape[0]))
-        texture = (texture / np.max(texture)).astype(float)
-        texture += self.texture_epsilon_multiply
-        # Normalize texture and weight it by epsilon
-        texture = texture / np.max(texture)
-        combined_image = np.zeros_like(image)
-        combined_image = texture * image
-        return combined_image
-
     def evaluate_segmentation(self, predictions, ground_truths, iou_threshold=0.5):
         # Edge cases: nothing to compare
         if len(predictions) == 0 and len(ground_truths) == 0:
@@ -600,67 +287,11 @@ class Validator:
         return iou_all_masks, precision, recall, f1_score
 
     def main(self):
-        # create & plot canvases in separate module
-        generate_and_plot_canvases(self)
         ms_to_mic = self.ms_spacing / self.mic_spacing
-
-        print(self.diffusion_canvas[:, :, 0].shape)
-        print(type(self.diffusion_canvas[:, :, 0]))
-        print(self.diffusion_canvas[:, :, 0].dtype)
-
-        # print("perform pertubations...")
-        img = skimage.measure.block_reduce(
-            self.diffusion_canvas[:, :, 0],
-            block_size=(int(ms_to_mic), int(ms_to_mic)),
-            func=np.sum
-        )
-        self.maldi_canvas = np.zeros((img.shape[0], img.shape[1], len(self.mass_list)))
-
-        for i in range(len(self.mass_list)):
-            img = sitk.GetImageFromArray(self.diffusion_canvas[:, :, i])
-            img.SetSpacing((self.mic_spacing, self.mic_spacing))
-            self.pertubation_transform_maldi, pertubated_img = self.pertubate_img(img)
-            pertubated_arr = sitk.GetArrayFromImage(pertubated_img)
-
-            if self.plot or self.save_img:
-                fig = plt.figure(figsize=(6, 6))
-                plt.imshow(
-                    pertubated_arr,
-                    vmax=np.percentile(pertubated_arr, 99.),
-                    cmap='inferno'
-                )
-                plt.axis('off')
-                if self.save_img:
-                    fig.savefig(
-                        self.output + f"/pertubated_img_{i}.svg",
-                        bbox_inches='tight',
-                        pad_inches=0,
-                        dpi=600
-                    )
-
-            pertubated_maldi_img = skimage.measure.block_reduce(
-                pertubated_arr,
-                block_size=(int(ms_to_mic), int(ms_to_mic)),
-                func=np.sum
-            )
-
-            self.maldi_canvas[:, :, i] = pertubated_maldi_img
-            if self.texture == 'all':
-                self.maldi_canvas[:, :, i] = self.multiply_texture(
-                    self.maldi_canvas[:, :, i],
-                    self.texture_path
-                )
-                self.maldi_canvas[:, :, i] = self.add_texture(
-                    self.maldi_canvas[:, :, i],
-                    self.texture_path
-                )
 
         maldi_sitk = sitk.GetImageFromArray(self.maldi_canvas[:, :, 0])
         maldi_sitk.SetSpacing((self.ms_spacing, self.ms_spacing))
-        maldi_img = self.maldi_canvas[:, :, 0]
-        if self.texture == 'registration':
-            maldi_img = self.multiply_texture(maldi_img, self.texture_path)
-            maldi_img = self.add_texture(maldi_img, self.texture_path)
+        maldi_img = self.registration_image
 
         if self.plot or self.save_img:
 
@@ -782,14 +413,14 @@ class Validator:
         center = np.array(self.maldi_canvas.shape[:2], dtype=float) / 2
 
         center = center * self.ms_spacing
-        moving_pertubated_landmarks = self.pertubate_coordinates(
-            moving_landmarks, center=center, inverse=True)
+        moving_pertubated_landmarks = pertubate_coordinates(
+            moving_landmarks, center, self.rotation, self.scale, inverse=True)
 
-        if self.teaching_imprecision > 0:
+        if self.teaching_imprecision is not None and self.teaching_imprecision > 0:
             for i in range(len(mic_landmarks)):
                 for j in range(2):
                     shift = random.uniform(-self.teaching_imprecision / 2,
-                                           self.teaching_imprecision / 2)
+                                        self.teaching_imprecision / 2)
                     mic_landmarks[i][j] += shift
                     shift = random.uniform(0, self.teaching_imprecision)
                     moving_pertubated_landmarks[i][j] += shift
@@ -850,14 +481,15 @@ class Validator:
         registration_method.SetOptimizerScalesFromPhysicalShift()
         if self.use_perfect_registration:
             translation_transform = sitk.TranslationTransform(2)
-            center_fixed = self.get_image_center(mic_sitk)
-            center_moving = self.get_image_center(moving_sitk)
+            center_fixed = get_image_center(mic_sitk)
+            center_moving = get_image_center(moving_sitk)
             self.moving_array = sitk.GetArrayFromImage(moving_sitk)
             translation = np.array(center_fixed) - np.array(center_moving) + \
                 np.array((self.ms_spacing / 2, self.ms_spacing / 2))
             translation_transform.SetOffset(-translation)
             self.final_transform = sitk.CompositeTransform(2)
-            self.pertubation_transform_moving, _ = self.pertubate_img(moving_sitk)
+            self.pertubation_transform_moving = perturbation_transform(
+                get_image_center(moving_sitk), self.rotation, self.scale)
             self.final_transform.AddTransform(
                 self.pertubation_transform_moving.GetInverse())
             self.final_transform.AddTransform(translation_transform)
@@ -922,6 +554,7 @@ class Validator:
             masks = mask_cut
         else:
             # TODO: add a table for cellpose settings in report files
+            from cellpose import models
             model = models.Cellpose(gpu=False, model_type='cyto2')
             masks, flows, styles, diams = model.eval(
                 mic_cut, diameter=self.cell_diameter)
@@ -1182,43 +815,14 @@ class Validator:
         return self.canvas_metrics, self.registration_metrics, self.segmentation_metrics, self.spectra_metrics, self.cluster_metrics
 
 
-class CellType:
-
-    def __init__(self, name, parameters, population):
-        self.name = name
-        self.parameters = parameters
-        self.population = population
-        return None
-
-    def get_distribution(self, mz):
-        return self.parameters[mz][0]
-
-    def get_location(self, mz):
-        return self.parameters[mz][1]
-
-    def get_scale(self, mz):
-        return self.parameters[mz][2]
-
-    def get_intensity(self, mz):
-        if self.parameters[mz][0] == "normal":
-            intensity = np.abs(np.random.normal(
-                loc=self.parameters[mz][1], scale=self.parameters[mz][2]))
-        elif self.parameters[mz][0] == "uniform":
-            low = self.parameters[mz][1] - self.parameters[mz][2]
-            high = self.parameters[mz][1] + self.parameters[mz][2]
-            intensity = np.abs(np.random.uniform(low=low, high=high))
-        return intensity
-
-    def get_directory(self):
-        return self.parameters["path"]
-
-
 if __name__ == "__main__":
     import argparse
     import json
 
-    parser = argparse.ArgumentParser(description="Generate and evaluate synthetic MALDI data")
-    parser.add_argument("--config", type=Path, required=True, help="JSON simulator configuration")
+    parser = argparse.ArgumentParser(
+        description="Generate and evaluate synthetic MALDI data")
+    parser.add_argument("--config", type=Path, required=True,
+                        help="JSON simulator configuration")
     args = parser.parse_args()
     settings = json.loads(args.config.read_text())
     settings["cell_types"] = [CellType(
@@ -1226,4 +830,12 @@ if __name__ == "__main__":
                        for key, value in item["parameters"].items()}, item["population"])
         for item in settings["cell_types"]]
     Path(settings.get("output", "output")).mkdir(parents=True, exist_ok=True)
-    Validator(**settings).main()
+    import inspect
+
+    evaluation_keys = set(inspect.signature(Validator).parameters) - {"canvas"}
+    evaluation = {key: settings.pop(key)
+                  for key in list(settings) if key in evaluation_keys}
+    generation = CanvasSettings(**settings, **{
+        key: evaluation[key] for key in ("output", "plot", "save_img") if key in evaluation})
+    canvas = generate_and_plot_canvases(generation)
+    Validator(canvas, **evaluation).main()
