@@ -86,7 +86,7 @@ def diffuse_mask_batched(
     diffusion_coeff=1.0,     # can be scalar or (B,)
     barrier_alpha=0.1,       # can be scalar or (B,)
     leaky_outer_boundary=True,
-    ):
+):
     """
     Pixel-based diffusion with barriers on label boundaries.
 
@@ -126,7 +126,8 @@ def diffuse_mask_batched(
     if Apha.ndim == 0:
         Apha = np.full(B, float(Apha), dtype=float)
     elif Apha.shape != (B,):
-        raise ValueError(f"barrier_alpha must be scalar or shape (B,), got {Apha.shape}")
+        raise ValueError(
+            f"barrier_alpha must be scalar or shape (B,), got {Apha.shape}")
 
     boundary = _outer_boundary_indices(H, W) if leaky_outer_boundary else None
 
